@@ -9,6 +9,9 @@ export default function MasterData({ user }) {
   const [showModal, setShowModal] = useState(false)
   const [editData, setEditData] = useState(null)
   const [formData, setFormData] = useState({})
+  const [vendors, setVendors] = useState([])
+  const [sections, setSections] = useState([])
+
 
   const tabs = [
     { id: 'blocks', label: '🗺️ Blocks', table: 'blocks' },
@@ -22,7 +25,18 @@ export default function MasterData({ user }) {
 
   useEffect(() => {
     fetchData()
+    fetchDropdownData()
   }, [activeTab])
+
+  const fetchDropdownData = async () => {
+    const [v, s] = await Promise.all([
+      supabase.from('vendors').select('*').eq('active', true),
+      supabase.from('sections').select('*').eq('active', true)
+    ])
+    setVendors(v.data || [])
+    setSections(s.data || [])
+  }
+
 
   const fetchData = async () => {
     setLoading(true)
@@ -260,6 +274,141 @@ export default function MasterData({ user }) {
             </div>
           </div>
         )
+      case 'workers':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Vendor *</label>
+              <select value={formData.vendor_id || ''} onChange={(e) => setFormData({...formData, vendor_id: e.target.value})} className="w-full px-3 py-2 border rounded" required>
+                <option value="">Pilih Vendor</option>
+                {data.length > 0 && vendors && vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Code *</label>
+                <input type="text" value={formData.code || ''} onChange={(e) => setFormData({...formData, code: e.target.value})} className="w-full px-3 py-2 border rounded" required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Nama Pekerja *</label>
+                <input type="text" value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full px-3 py-2 border rounded" required />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Phone</label>
+              <input type="text" value={formData.phone || ''} onChange={(e) => setFormData({...formData, phone: e.target.value})} className="w-full px-3 py-2 border rounded" />
+            </div>
+            <div className="flex items-center">
+              <input type="checkbox" checked={formData.active ?? true} onChange={(e) => setFormData({...formData, active: e.target.checked})} className="w-4 h-4 mr-2" />
+              <label className="text-sm">Active</label>
+            </div>
+          </div>
+        )
+      case 'sections':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Code *</label>
+                <input type="text" value={formData.code || ''} onChange={(e) => setFormData({...formData, code: e.target.value})} className="w-full px-3 py-2 border rounded" required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Nama Section *</label>
+                <input type="text" value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full px-3 py-2 border rounded" required />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Description</label>
+              <textarea value={formData.description || ''} onChange={(e) => setFormData({...formData, description: e.target.value})} className="w-full px-3 py-2 border rounded" rows="3" />
+            </div>
+            <div className="flex items-center">
+              <input type="checkbox" checked={formData.active ?? true} onChange={(e) => setFormData({...formData, active: e.target.checked})} className="w-4 h-4 mr-2" />
+              <label className="text-sm">Active</label>
+            </div>
+          </div>
+        )
+      case 'activities':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Code *</label>
+                <input type="text" value={formData.code || ''} onChange={(e) => setFormData({...formData, code: e.target.value})} className="w-full px-3 py-2 border rounded" required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Nama Activity *</label>
+                <input type="text" value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full px-3 py-2 border rounded" required />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Description</label>
+              <textarea value={formData.description || ''} onChange={(e) => setFormData({...formData, description: e.target.value})} className="w-full px-3 py-2 border rounded" rows="3" />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex items-center">
+                <input type="checkbox" checked={formData.requires_material ?? false} onChange={(e) => setFormData({...formData, requires_material: e.target.checked})} className="w-4 h-4 mr-2" />
+                <label className="text-sm">Memerlukan Material</label>
+              </div>
+              <div className="flex items-center">
+                <input type="checkbox" checked={formData.requires_vendor ?? true} onChange={(e) => setFormData({...formData, requires_vendor: e.target.checked})} className="w-4 h-4 mr-2" />
+                <label className="text-sm">Memerlukan Vendor</label>
+              </div>
+            </div>
+            <div className="flex items-center">
+              <input type="checkbox" checked={formData.active ?? true} onChange={(e) => setFormData({...formData, active: e.target.checked})} className="w-4 h-4 mr-2" />
+              <label className="text-sm">Active</label>
+            </div>
+          </div>
+        )
+      case 'users':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Username *</label>
+                <input type="text" value={formData.username || ''} onChange={(e) => setFormData({...formData, username: e.target.value})} className="w-full px-3 py-2 border rounded" required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Password *</label>
+                <input type="password" value={formData.password || ''} onChange={(e) => setFormData({...formData, password: e.target.value})} className="w-full px-3 py-2 border rounded" required={!editData} />
+                {editData && <small className="text-gray-500">Kosongkan jika tidak ingin mengubah password</small>}
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Nama Lengkap *</label>
+              <input type="text" value={formData.full_name || ''} onChange={(e) => setFormData({...formData, full_name: e.target.value})} className="w-full px-3 py-2 border rounded" required />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Role *</label>
+                <select value={formData.role || 'supervisor'} onChange={(e) => setFormData({...formData, role: e.target.value})} className="w-full px-3 py-2 border rounded" required>
+                  <option value="admin">Admin</option>
+                  <option value="supervisor">Supervisor</option>
+                  <option value="mandor">Mandor</option>
+                  <option value="viewer">Viewer</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Section</label>
+                <select value={formData.section_id || ''} onChange={(e) => setFormData({...formData, section_id: e.target.value || null})} className="w-full px-3 py-2 border rounded">
+                  <option value="">Tidak ada</option>
+                  {sections && sections.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Vendor (untuk role mandor)</label>
+              <select value={formData.vendor_id || ''} onChange={(e) => setFormData({...formData, vendor_id: e.target.value || null})} className="w-full px-3 py-2 border rounded">
+                <option value="">Tidak ada</option>
+                {vendors && vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center">
+              <input type="checkbox" checked={formData.active ?? true} onChange={(e) => setFormData({...formData, active: e.target.checked})} className="w-4 h-4 mr-2" />
+              <label className="text-sm">Active</label>
+            </div>
+          </div>
+        )
       default:
         return <div className="text-gray-600">Form untuk {activeTab} akan diimplementasi</div>
     }
@@ -351,6 +500,161 @@ export default function MasterData({ user }) {
                   <td className="px-4 py-3 text-sm">{item.name}</td>
                   <td className="px-4 py-3 text-sm">{item.contact_person}</td>
                   <td className="px-4 py-3 text-sm">{item.phone}</td>
+                  <td className="px-4 py-3 text-sm">
+                    <button onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-800 mr-3">Edit</button>
+                    <button onClick={() => handleDelete(item.id)} className="text-red-600 hover:text-red-800">Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      case 'workers':
+        return (
+          <table className="w-full">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Code</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nama</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Phone</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {data.map(item => (
+                <tr key={item.id}>
+                  <td className="px-4 py-3 text-sm font-medium">{item.code}</td>
+                  <td className="px-4 py-3 text-sm">{item.name}</td>
+                  <td className="px-4 py-3 text-sm">{item.vendors?.name || '-'}</td>
+                  <td className="px-4 py-3 text-sm">{item.phone || '-'}</td>
+                  <td className="px-4 py-3 text-sm">
+                    <span className={`px-2 py-1 rounded text-xs ${item.active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                      {item.active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    <button onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-800 mr-3">Edit</button>
+                    <button onClick={() => handleDelete(item.id)} className="text-red-600 hover:text-red-800">Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      case 'sections':
+        return (
+          <table className="w-full">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Code</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nama</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {data.map(item => (
+                <tr key={item.id}>
+                  <td className="px-4 py-3 text-sm font-medium">{item.code}</td>
+                  <td className="px-4 py-3 text-sm">{item.name}</td>
+                  <td className="px-4 py-3 text-sm">{item.description || '-'}</td>
+                  <td className="px-4 py-3 text-sm">
+                    <span className={`px-2 py-1 rounded text-xs ${item.active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                      {item.active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    <button onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-800 mr-3">Edit</button>
+                    <button onClick={() => handleDelete(item.id)} className="text-red-600 hover:text-red-800">Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      case 'activities':
+        return (
+          <table className="w-full">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Code</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nama</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Material</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {data.map(item => (
+                <tr key={item.id}>
+                  <td className="px-4 py-3 text-sm font-medium">{item.code}</td>
+                  <td className="px-4 py-3 text-sm">{item.name}</td>
+                  <td className="px-4 py-3 text-sm">{item.description || '-'}</td>
+                  <td className="px-4 py-3 text-sm">
+                    <span className={`px-2 py-1 rounded text-xs ${item.requires_material ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}`}>
+                      {item.requires_material ? 'Ya' : 'Tidak'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    <span className={`px-2 py-1 rounded text-xs ${item.requires_vendor ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                      {item.requires_vendor ? 'Ya' : 'Tidak'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    <span className={`px-2 py-1 rounded text-xs ${item.active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                      {item.active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    <button onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-800 mr-3">Edit</button>
+                    <button onClick={() => handleDelete(item.id)} className="text-red-600 hover:text-red-800">Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      case 'users':
+        return (
+          <table className="w-full">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Username</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nama Lengkap</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Section</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {data.map(item => (
+                <tr key={item.id}>
+                  <td className="px-4 py-3 text-sm font-medium">{item.username}</td>
+                  <td className="px-4 py-3 text-sm">{item.full_name}</td>
+                  <td className="px-4 py-3 text-sm">
+                    <span className={`px-2 py-1 rounded text-xs ${
+                      item.role === 'admin' ? 'bg-red-100 text-red-800' : 
+                      item.role === 'supervisor' ? 'bg-blue-100 text-blue-800' : 
+                      item.role === 'mandor' ? 'bg-green-100 text-green-800' : 
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {item.role}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm">{item.sections?.name || '-'}</td>
+                  <td className="px-4 py-3 text-sm">{item.vendors?.name || '-'}</td>
+                  <td className="px-4 py-3 text-sm">
+                    <span className={`px-2 py-1 rounded text-xs ${item.active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                      {item.active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-sm">
                     <button onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-800 mr-3">Edit</button>
                     <button onClick={() => handleDelete(item.id)} className="text-red-600 hover:text-red-800">Delete</button>
