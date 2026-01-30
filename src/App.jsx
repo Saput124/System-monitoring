@@ -5,8 +5,7 @@ import Dashboard from './components/dashboard/Dashboard'
 import MasterData from './components/master/MasterData'
 import Assignment from './components/assignment/Assignment'
 import WorkPlanRegistration from './components/planning/WorkPlanRegistration'
-import TransactionInput from './components/transaction/TransactionInput'
-import TransactionHistory from './components/transaction/TransactionHistory'
+import Transaction from './components/transaction/Transaction'
 
 function App() {
   const [user, setUser] = useState(null)
@@ -57,7 +56,6 @@ function App() {
                     <a href="/planning" className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600">Planning</a>
                   )}
                   <a href="/transaction" className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600">Transaksi</a>
-                  <a href="/history" className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600">History</a>
                 </div>
               </div>
               <div className="flex items-center space-x-4">
@@ -75,8 +73,7 @@ function App() {
             <Route path="/master" element={user.role === 'admin' ? <MasterData user={user} /> : <Navigate to="/" />} />
             <Route path="/assignment" element={user.role === 'admin' ? <Assignment user={user} /> : <Navigate to="/" />} />
             <Route path="/planning" element={['admin', 'section_head'].includes(user.role) ? <WorkPlanRegistration user={user} /> : <Navigate to="/" />} />
-            <Route path="/transaction" element={<TransactionInput user={user} />} />
-            <Route path="/history" element={<TransactionHistory user={user} />} />
+            <Route path="/transaction" element={<Transaction user={user} />} />
           </Routes>
         </div>
       </div>
