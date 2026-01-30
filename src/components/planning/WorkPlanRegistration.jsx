@@ -43,10 +43,12 @@ export default function WorkPlanRegistration({ user }) {
   }, [])
 
   useEffect(() => {
-    if (formData.activity_type_id) {
-      fetchActivityMaterials()
+    if (formData.activity_type_id && formData.stage_id) {
+      fetchActivityMaterialsAndCalculate()
+    } else if (formData.activity_type_id) {
+      fetchActivityMaterialsAndCalculate()
     }
-  }, [formData.activity_type_id])
+  }, [formData.activity_type_id, formData.stage_id, selectedBlocks])
 
   const fetchMasterData = async () => {
     const [s, a, v, b, st] = await Promise.all([
@@ -63,24 +65,68 @@ export default function WorkPlanRegistration({ user }) {
     setStages(st.data || [])
   }
 
-  const fetchActivityMaterials = async () => {
-    const { data } = await supabase
+  const fetchActivityMaterialsAndCalculate = async () => {
+    if (!formData.activity_type_id) return
+
+    // Get kategori tanaman dari selected blocks
+    const blockKategoris = [...new Set(selectedBlocks.map(b => {
+      const block = blocks.find(blk => blk.id === b.block_id)
+      return block?.kategori
+    }).filter(Boolean))]
+
+    // Build query untuk activity materials
+    let query = supabase
       .from('activity_materials')
-      .select('*, materials(*)')
+      .select('*, materials(*), activity_stages(*)')
       .eq('activity_type_id', formData.activity_type_id)
+
+    // Filter by stage jika ada
+    if (formData.stage_id) {
+      query = query.or(`stage_id.is.null,stage_id.eq.${formData.stage_id}`)
+    }
+
+    const { data } = await query
     
     if (data && data.length > 0) {
-      const materialsList = data.map(am => ({
-        material_id: am.material_id,
-        material_code: am.materials.code,
-        material_name: am.materials.name,
-        default_dosis: am.default_dosis,
-        unit: am.unit,
-        required: am.required
-      }))
-      setMaterials(materialsList)
+      // Filter berdasarkan kategori tanaman dari blocks
+      let filteredMaterials = data
+      if (blockKategoris.length > 0) {
+        filteredMaterials = data.filter(am => 
+          !am.tanaman_kategori || blockKategoris.includes(am.tanaman_kategori)
+        )
+      }
+
+      // Calculate total quantity otomatis
+      const totalLuas = selectedBlocks.reduce((sum, b) => sum + parseFloat(b.luas_total || 0), 0)
+      
+      const materialsWithQty = filteredMaterials.map(am => {
+        const totalQty = totalLuas * parseFloat(am.default_dosis || 0)
+        return {
+          material_id: am.material_id,
+          material_code: am.materials.code,
+          material_name: am.materials.name,
+          stage_id: am.stage_id,
+          stage_name: am.activity_stages?.name || 'General',
+          alternative_option: am.alternative_option,
+          default_dosis: am.default_dosis,
+          unit: am.unit,
+          required: am.required,
+          total_quantity: totalQty.toFixed(3), // AUTO CALCULATED!
+          tanaman_kategori: am.tanaman_kategori
+        }
+      })
+      
+      setMaterials(materialsWithQty)
+      
+      // Auto-fill selectedMaterials dengan calculated values
+      setSelectedMaterials(materialsWithQty.map(m => ({
+        material_id: m.material_id,
+        total_quantity: m.total_quantity,
+        unit: m.unit
+      })))
     } else {
       setMaterials([])
+      setSelectedMaterials([])
     }
   }
 
@@ -577,30 +623,56 @@ export default function WorkPlanRegistration({ user }) {
           {/* Materials */}
           {materials.length > 0 && (
             <div className="border-t pt-4">
-              <h3 className="font-semibold mb-3">Rencana Material</h3>
+              <h3 className="font-semibold mb-3">Rencana Material (Auto-Calculated)</h3>
+              <div className="bg-blue-50 border-l-4 border-blue-500 p-3 mb-3">
+                <p className="text-sm text-blue-800">
+                  ℹ️ Material dan quantity sudah dihitung otomatis berdasarkan: <strong>Dosis × Total Luas</strong>
+                  <br/>Total Luas: <strong>{selectedBlocks.reduce((sum, b) => sum + parseFloat(b.luas_total), 0).toFixed(2)} Ha</strong>
+                </p>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50">
                     <tr>
                       <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Material</th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Default Dosis</th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Total Quantity</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Stage</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Kategori</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Alternative</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Dosis/Ha</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Total Quantity (Auto)</th>
                       <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Unit</th>
                       <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Required</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {materials.map((mat) => (
-                      <tr key={mat.material_id}>
+                    {materials.map((mat, idx) => (
+                      <tr key={`${mat.material_id}-${mat.stage_id}-${mat.alternative_option}`}>
                         <td className="px-3 py-2 text-sm">{mat.material_code} - {mat.material_name}</td>
-                        <td className="px-3 py-2 text-sm">{mat.default_dosis} {mat.unit}</td>
+                        <td className="px-3 py-2 text-sm">{mat.stage_name}</td>
+                        <td className="px-3 py-2 text-sm">
+                          {mat.tanaman_kategori ? (
+                            <span className={`px-2 py-1 rounded text-xs ${mat.tanaman_kategori === 'PC' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}>
+                              {mat.tanaman_kategori}
+                            </span>
+                          ) : (
+                            <span className="text-gray-500 text-xs">All</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-sm">{mat.alternative_option || '-'}</td>
+                        <td className="px-3 py-2 text-sm font-medium">{mat.default_dosis}</td>
                         <td className="px-3 py-2">
                           <input
                             type="number"
                             step="0.001"
-                            value={selectedMaterials.find(m => m.material_id === mat.material_id)?.total_quantity || ''}
-                            onChange={(e) => handleMaterialChange(mat.material_id, e.target.value)}
-                            className="w-32 px-2 py-1 border rounded text-sm"
+                            value={mat.total_quantity}
+                            onChange={(e) => {
+                              const newMaterials = [...materials]
+                              newMaterials[idx].total_quantity = e.target.value
+                              setMaterials(newMaterials)
+                              handleMaterialChange(mat.material_id, e.target.value)
+                            }}
+                            className="w-32 px-2 py-1 border rounded text-sm bg-yellow-50 font-semibold"
+                            title="Bisa diedit manual jika perlu"
                           />
                         </td>
                         <td className="px-3 py-2 text-sm">{mat.unit}</td>
@@ -612,6 +684,7 @@ export default function WorkPlanRegistration({ user }) {
                   </tbody>
                 </table>
               </div>
+              <p className="text-xs text-gray-600 mt-2">💡 Quantity sudah otomatis, tapi tetap bisa diedit manual jika perlu penyesuaian.</p>
             </div>
           )}
 
