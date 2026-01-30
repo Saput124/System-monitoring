@@ -988,3 +988,5 @@ export default function TransactionInput({ user }) {
     </div>
   )
 }
+return null
+}
