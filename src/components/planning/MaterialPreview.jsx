@@ -356,4 +356,4 @@ const MaterialPreview = ({
   );
 };
 
-export MaterialPreview;
+export default MaterialPreview;
