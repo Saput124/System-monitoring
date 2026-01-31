@@ -356,4 +356,4 @@ const MaterialPreview = ({
   );
 };
 
-export dMaterialPreviewPreview;
+export MaterialPreview;
