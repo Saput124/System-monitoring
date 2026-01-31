@@ -6,11 +6,12 @@ export default function TransactionInput({ user }) {
   const [selectedPlan, setSelectedPlan] = useState(null)
   const [blockActivities, setBlockActivities] = useState([])
   const [selectedBlocks, setSelectedBlocks] = useState([])
+  const [plannedMaterials, setPlannedMaterials] = useState([])
   const [formData, setFormData] = useState({
-    tanggal: new Date().toISOString().split('T')[0],
-    jumlah_pekerja: '',
-    kondisi: '',
-    catatan: ''
+    tanggal_pekerjaan: new Date().toISOString().split('T')[0],
+    worker_name: '',
+    pekerja: '',
+    notes: ''
   })
   const [loading, setLoading] = useState(false)
 
@@ -21,6 +22,7 @@ export default function TransactionInput({ user }) {
   useEffect(() => {
     if (selectedPlan) {
       fetchBlockActivities()
+      fetchPlannedMaterials()
     }
   }, [selectedPlan])
 
@@ -31,7 +33,7 @@ export default function TransactionInput({ user }) {
       .select(`
         *,
         sections(name),
-        activity_types(name, requires_material, requires_vendor),
+        activity_types(name, uses_stages),
         vendors(name),
         activity_stages(name)
       `)
@@ -54,7 +56,15 @@ export default function TransactionInput({ user }) {
       .from('block_activities')
       .select(`
         *,
-        blocks(code, name, kawasan, luas_total, kategori, varietas)
+        blocks(
+          id,
+          kode_blok,
+          nama_blok,
+          kawasan,
+          luas_blok,
+          tanaman_kategori,
+          varietas
+        )
       `)
       .eq('activity_plan_id', selectedPlan.id)
       .in('status', ['planned', 'in_progress'])
@@ -62,6 +72,18 @@ export default function TransactionInput({ user }) {
 
     setBlockActivities(data || [])
     setSelectedBlocks([])
+  }
+
+  const fetchPlannedMaterials = async () => {
+    const { data } = await supabase
+      .from('planned_materials')
+      .select(`
+        *,
+        materials(id, code, name, unit)
+      `)
+      .eq('activity_plan_id', selectedPlan.id)
+
+    setPlannedMaterials(data || [])
   }
 
   const handleBlockToggle = (ba) => {
@@ -72,15 +94,15 @@ export default function TransactionInput({ user }) {
       setSelectedBlocks([...selectedBlocks, {
         id: ba.id,
         block_id: ba.block_id,
-        code: ba.blocks.code,
-        name: ba.blocks.name,
+        kode_blok: ba.blocks.kode_blok,
+        nama_blok: ba.blocks.nama_blok,
         kawasan: ba.blocks.kawasan,
-        kategori: ba.blocks.kategori,
+        tanaman_kategori: ba.blocks.tanaman_kategori,
         varietas: ba.blocks.varietas,
         luas_total: ba.luas_total,
         luas_completed: ba.luas_completed || 0,
         luas_remaining: ba.luas_remaining,
-        luas_dikerjakan: ba.luas_remaining
+        luas_dikerjakan: Math.min(ba.luas_remaining, ba.luas_total)
       }])
     }
   }
@@ -95,13 +117,61 @@ export default function TransactionInput({ user }) {
     return selectedBlocks.reduce((sum, b) => sum + (parseFloat(b.luas_dikerjakan) || 0), 0)
   }
 
+  const calculateMaterialsForBlock = (block) => {
+    // Fetch SOP materials based on activity and stage
+    return new Promise(async (resolve) => {
+      try {
+        let query = supabase
+          .from('activity_materials')
+          .select('*, materials(id, code, name, unit)')
+          .eq('activity_type_id', selectedPlan.activity_type_id)
+
+        // Filter by stage if exists
+        if (selectedPlan.stage_id) {
+          query = query.eq('stage_id', selectedPlan.stage_id)
+        } else {
+          query = query.is('stage_id', null)
+        }
+
+        const { data: activityMaterials } = await query
+
+        if (!activityMaterials) {
+          resolve([])
+          return
+        }
+
+        // Filter by kategori and calculate
+        const materials = activityMaterials
+          .filter(am => {
+            // Filter by tanaman_kategori
+            if (am.tanaman_kategori && am.tanaman_kategori !== block.tanaman_kategori) {
+              return false
+            }
+            return true
+          })
+          .map(am => ({
+            material_id: am.material_id,
+            material_code: am.materials.code,
+            material_name: am.materials.name,
+            quantity_used: (parseFloat(am.default_dosis) * parseFloat(block.luas_dikerjakan)).toFixed(3),
+            unit: am.unit
+          }))
+
+        resolve(materials)
+      } catch (err) {
+        console.error('Error calculating materials:', err)
+        resolve([])
+      }
+    })
+  }
+
   const handleSubmit = async () => {
     if (selectedBlocks.length === 0) {
       alert('❌ Pilih minimal 1 blok!')
       return
     }
 
-    if (!formData.tanggal) {
+    if (!formData.tanggal_pekerjaan) {
       alert('❌ Tanggal harus diisi!')
       return
     }
@@ -109,43 +179,40 @@ export default function TransactionInput({ user }) {
     // Validate luas dikerjakan
     for (const block of selectedBlocks) {
       if (!block.luas_dikerjakan || block.luas_dikerjakan <= 0) {
-        alert(`❌ Luas dikerjakan untuk ${block.code} harus > 0`)
+        alert(`❌ Luas dikerjakan untuk ${block.kode_blok} harus > 0`)
         return
       }
       if (block.luas_dikerjakan > block.luas_remaining) {
-        alert(`❌ Luas dikerjakan untuk ${block.code} (${block.luas_dikerjakan}) melebihi sisa (${block.luas_remaining})`)
+        alert(`❌ Luas dikerjakan untuk ${block.kode_blok} (${block.luas_dikerjakan}) melebihi sisa (${block.luas_remaining})`)
         return
       }
     }
 
+    const confirmed = confirm(
+      `Konfirmasi Transaksi:\n\n` +
+      `Tanggal: ${formData.tanggal_pekerjaan}\n` +
+      `Jumlah Blok: ${selectedBlocks.length}\n` +
+      `Total Luas: ${getTotalLuasDikerjakan().toFixed(2)} Ha\n\n` +
+      `Lanjutkan?`
+    )
+
+    if (!confirmed) return
+
     setLoading(true)
 
     try {
-      // Get material configuration if needed
-      let materials = []
-      if (selectedPlan.activity_types.requires_material) {
-        const { data: activityMaterials } = await supabase
-          .from('activity_materials')
-          .select('*, materials(code, name, unit)')
-          .eq('activity_type_id', selectedPlan.activity_type_id)
-
-        if (activityMaterials) {
-          materials = activityMaterials
-        }
-      }
-
       // Insert transactions for each selected block
       for (const block of selectedBlocks) {
-        // Insert transaction
+        // 1. Insert transaction
         const { data: transaction, error: txError } = await supabase
           .from('transactions')
           .insert({
             block_activity_id: block.id,
-            tanggal: formData.tanggal,
+            tanggal_pekerjaan: formData.tanggal_pekerjaan,
             luas_dikerjakan: block.luas_dikerjakan,
-            jumlah_pekerja: formData.jumlah_pekerja ? parseInt(formData.jumlah_pekerja) : null,
-            kondisi: formData.kondisi || null,
-            catatan: formData.catatan || null,
+            worker_name: formData.worker_name || null,
+            pekerja: formData.pekerja ? parseInt(formData.pekerja) : null,
+            notes: formData.notes || null,
             created_by: user.id
           })
           .select()
@@ -153,36 +220,22 @@ export default function TransactionInput({ user }) {
 
         if (txError) throw txError
 
-        // Insert materials if required
+        // 2. Calculate and insert materials based on SOP
+        const materials = await calculateMaterialsForBlock(block)
+        
         if (materials.length > 0) {
-          const blockData = blockActivities.find(ba => ba.id === block.id)
-          
-          const materialInserts = materials
-            .filter(m => {
-              if (m.tanaman_kategori && m.tanaman_kategori !== blockData.blocks.kategori) return false
-              if (m.alternative_option && m.alternative_option !== selectedPlan.alternative_option) return false
-              if (m.stage_id && m.stage_id !== selectedPlan.stage_id) return false
-              return true
-            })
-            .map(m => ({
-              transaction_id: transaction.id,
-              material_id: m.material_id,
-              quantity_used: (parseFloat(m.default_dosis) * parseFloat(block.luas_dikerjakan)).toFixed(3),
-              unit: m.unit
-            }))
-
-          if (materialInserts.length > 0) {
-            await supabase.from('transaction_materials').insert(materialInserts)
-          }
-        }
-
-        // Insert workers (manual count)
-        if (formData.jumlah_pekerja) {
-          await supabase.from('transaction_workers').insert({
+          const materialInserts = materials.map(m => ({
             transaction_id: transaction.id,
-            worker_id: null,
-            jumlah_manual: parseInt(formData.jumlah_pekerja)
-          })
+            material_id: m.material_id,
+            quantity_used: m.quantity_used,
+            unit: m.unit
+          }))
+
+          const { error: matError } = await supabase
+            .from('transaction_materials')
+            .insert(materialInserts)
+
+          if (matError) throw matError
         }
       }
 
@@ -191,229 +244,298 @@ export default function TransactionInput({ user }) {
       // Reset form
       setSelectedBlocks([])
       setFormData({
-        tanggal: new Date().toISOString().split('T')[0],
-        jumlah_pekerja: '',
-        kondisi: '',
-        catatan: ''
+        tanggal_pekerjaan: new Date().toISOString().split('T')[0],
+        worker_name: '',
+        pekerja: '',
+        notes: ''
       })
       
       // Refresh data
-      fetchBlockActivities()
       fetchPlans()
+      if (selectedPlan) {
+        fetchBlockActivities()
+        fetchPlannedMaterials()
+      }
 
-    } catch (error) {
-      alert('❌ Error: ' + error.message)
+    } catch (err) {
+      console.error('Error saving transaction:', err)
+      alert('❌ Error: ' + err.message)
+    } finally {
+      setLoading(false)
     }
-
-    setLoading(false)
   }
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Input Transaksi</h1>
+      {/* Plan Selection */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          Pilih Rencana Kerja
+        </label>
+        <select
+          value={selectedPlan?.id || ''}
+          onChange={(e) => {
+            const plan = plans.find(p => p.id === e.target.value)
+            setSelectedPlan(plan || null)
+          }}
+          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+        >
+          <option value="">-- Pilih Rencana --</option>
+          {plans.map(plan => (
+            <option key={plan.id} value={plan.id}>
+              {plan.activity_types?.name} - {plan.sections?.name} 
+              {plan.activity_stages && ` (${plan.activity_stages.name})`}
+              {' - '}{new Date(plan.target_bulan).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
+            </option>
+          ))}
+        </select>
+      </div>
 
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-2">Pilih Rencana Kerja *</label>
-            <select 
-              value={selectedPlan?.id || ''} 
-              onChange={(e) => {
-                const plan = plans.find(p => p.id === e.target.value)
-                setSelectedPlan(plan)
-              }}
-              className="w-full px-3 py-2 border rounded"
-            >
-              <option value="">-- Pilih Rencana --</option>
-              {plans.map(plan => (
-                <option key={plan.id} value={plan.id}>
-                  {plan.activity_types.name} - {plan.sections.name} - {new Date(plan.target_bulan).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
-                  {plan.vendors && ` - ${plan.vendors.name}`}
-                </option>
-              ))}
-            </select>
+      {selectedPlan && (
+        <>
+          {/* Plan Info */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <h3 className="font-semibold text-blue-900 mb-2">Detail Rencana</h3>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-blue-700">Activity:</span>
+                <span className="ml-2 font-medium">{selectedPlan.activity_types?.name}</span>
+              </div>
+              {selectedPlan.activity_stages && (
+                <div>
+                  <span className="text-blue-700">Stage:</span>
+                  <span className="ml-2 font-medium">{selectedPlan.activity_stages.name}</span>
+                </div>
+              )}
+              <div>
+                <span className="text-blue-700">Section:</span>
+                <span className="ml-2 font-medium">{selectedPlan.sections?.name}</span>
+              </div>
+              <div>
+                <span className="text-blue-700">Target:</span>
+                <span className="ml-2 font-medium">
+                  {new Date(selectedPlan.target_bulan).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
+                </span>
+              </div>
+            </div>
           </div>
 
-          {selectedPlan && (
-            <>
-              <div className="bg-blue-50 border border-blue-200 rounded p-4">
-                <h3 className="font-semibold mb-2">Detail Rencana</h3>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div><span className="text-gray-600">Activity:</span> <span className="font-medium">{selectedPlan.activity_types.name}</span></div>
-                  <div><span className="text-gray-600">Section:</span> <span className="font-medium">{selectedPlan.sections.name}</span></div>
-                  {selectedPlan.vendors && <div><span className="text-gray-600">Vendor:</span> <span className="font-medium">{selectedPlan.vendors.name}</span></div>}
-                  {selectedPlan.activity_stages && <div><span className="text-gray-600">Stage:</span> <span className="font-medium">{selectedPlan.activity_stages.name}</span></div>}
-                  {selectedPlan.alternative_option && <div><span className="text-gray-600">Alternative:</span> <span className="font-medium">{selectedPlan.alternative_option}</span></div>}
-                </div>
+          {/* Material Summary */}
+          {plannedMaterials.length > 0 && (
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+              <h3 className="font-semibold text-gray-900 mb-3">Material Planned:</h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {plannedMaterials.map(pm => (
+                  <div key={pm.id} className="text-sm">
+                    <div className="font-medium">{pm.materials.name}</div>
+                    <div className="text-gray-600">
+                      {pm.total_quantity.toFixed(2)} {pm.unit}
+                      <span className="text-xs ml-1">
+                        (Sisa: {pm.remaining_quantity.toFixed(2)})
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
-
-              <div>
-                <div className="flex justify-between items-center mb-3">
-                  <label className="block text-sm font-medium">Pilih Blok yang Dikerjakan * ({selectedBlocks.length} dipilih)</label>
-                  <div className="text-sm text-gray-600">Total: {getTotalLuasDikerjakan().toFixed(2)} Ha</div>
-                </div>
-                
-                {blockActivities.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">Semua blok sudah selesai</div>
-                ) : (
-                  <div className="border rounded divide-y max-h-96 overflow-y-auto">
-                    {blockActivities.map(ba => {
-                      const selected = selectedBlocks.find(b => b.id === ba.id)
-                      
-                      return (
-                        <div key={ba.id} className={`p-4 ${selected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}>
-                          <label className="flex items-start gap-3 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={!!selected}
-                              onChange={() => handleBlockToggle(ba)}
-                              className="w-5 h-5 mt-1"
-                            />
-                            <div className="flex-1">
-                              <div className="flex justify-between items-start mb-2">
-                                <div>
-                                  <div className="font-medium">{ba.blocks.code} - {ba.blocks.name}</div>
-                                  <div className="text-sm text-gray-600">
-                                    {ba.blocks.kawasan} | {ba.blocks.kategori} | {ba.blocks.varietas}
-                                  </div>
-                                </div>
-                                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                  ba.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800'
-                                }`}>
-                                  {ba.status}
-                                </span>
-                              </div>
-                              
-                              <div className="grid grid-cols-3 gap-2 text-sm mb-2">
-                                <div className="bg-white px-2 py-1 rounded">
-                                  <span className="text-gray-600">Total:</span> <span className="font-medium">{ba.luas_total} Ha</span>
-                                </div>
-                                <div className="bg-white px-2 py-1 rounded">
-                                  <span className="text-gray-600">Selesai:</span> <span className="font-medium text-green-600">{(ba.luas_completed || 0).toFixed(2)} Ha</span>
-                                </div>
-                                <div className="bg-white px-2 py-1 rounded">
-                                  <span className="text-gray-600">Sisa:</span> <span className="font-medium text-orange-600">{ba.luas_remaining.toFixed(2)} Ha</span>
-                                </div>
-                              </div>
-
-                              {selected && (
-                                <div className="mt-3">
-                                  <label className="block text-xs font-medium text-gray-700 mb-1">Luas Dikerjakan Hari Ini (Ha) *</label>
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    max={ba.luas_remaining}
-                                    value={selected.luas_dikerjakan}
-                                    onChange={(e) => handleLuasChange(ba.id, e.target.value)}
-                                    className="w-full px-3 py-2 border rounded"
-                                    placeholder={`Max: ${ba.luas_remaining} Ha`}
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          </label>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {selectedBlocks.length > 0 && (
-                <>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Tanggal Eksekusi *</label>
-                      <input 
-                        type="date" 
-                        value={formData.tanggal} 
-                        onChange={(e) => setFormData({...formData, tanggal: e.target.value})} 
-                        className="w-full px-3 py-2 border rounded" 
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Jumlah Pekerja</label>
-                      <input 
-                        type="number" 
-                        value={formData.jumlah_pekerja} 
-                        onChange={(e) => setFormData({...formData, jumlah_pekerja: e.target.value})} 
-                        className="w-full px-3 py-2 border rounded" 
-                        placeholder="Total pekerja"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Kondisi Lapangan</label>
-                    <textarea 
-                      value={formData.kondisi} 
-                      onChange={(e) => setFormData({...formData, kondisi: e.target.value})} 
-                      className="w-full px-3 py-2 border rounded" 
-                      rows={2}
-                      placeholder="Kondisi cuaca, tanah, dll"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Catatan</label>
-                    <textarea 
-                      value={formData.catatan} 
-                      onChange={(e) => setFormData({...formData, catatan: e.target.value})} 
-                      className="w-full px-3 py-2 border rounded" 
-                      rows={2}
-                      placeholder="Catatan tambahan"
-                    />
-                  </div>
-
-                  <div className="bg-green-50 border border-green-200 rounded p-4">
-                    <h3 className="font-semibold mb-2">Summary Transaksi</h3>
-                    <div className="space-y-1 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Jumlah Blok:</span>
-                        <span className="font-medium">{selectedBlocks.length} blok</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Total Luas Dikerjakan:</span>
-                        <span className="font-medium">{getTotalLuasDikerjakan().toFixed(2)} Ha</span>
-                      </div>
-                      {selectedPlan.activity_types.requires_material && (
-                        <div className="text-xs text-gray-600 mt-2">
-                          * Material akan otomatis terhitung sesuai SOP
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end gap-2">
-                    <button 
-                      onClick={() => {
-                        setSelectedBlocks([])
-                        setFormData({
-                          tanggal: new Date().toISOString().split('T')[0],
-                          jumlah_pekerja: '',
-                          kondisi: '',
-                          catatan: ''
-                        })
-                      }}
-                      className="px-4 py-2 border rounded hover:bg-gray-50"
-                    >
-                      Reset
-                    </button>
-                    <button 
-                      onClick={handleSubmit}
-                      disabled={loading}
-                      className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      {loading ? 'Menyimpan...' : '💾 Simpan Transaksi'}
-                    </button>
-                  </div>
-                </>
-              )}
-            </>
+            </div>
           )}
+
+          {/* Block Selection */}
+          <div>
+            <h3 className="font-semibold text-gray-900 mb-3">Pilih Blok yang Dikerjakan:</h3>
+            <div className="space-y-2 max-h-64 overflow-y-auto border border-gray-200 rounded-lg p-3">
+              {blockActivities.length === 0 ? (
+                <div className="text-center text-gray-500 py-4">
+                  Semua blok sudah selesai atau tidak ada blok
+                </div>
+              ) : (
+                blockActivities.map(ba => (
+                  <label
+                    key={ba.id}
+                    className={`flex items-center space-x-3 p-3 rounded cursor-pointer ${
+                      selectedBlocks.some(b => b.id === ba.id)
+                        ? 'bg-green-100 border-green-500 border-2'
+                        : 'bg-gray-50 border border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedBlocks.some(b => b.id === ba.id)}
+                      onChange={() => handleBlockToggle(ba)}
+                      className="rounded text-green-600"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium">
+                        {ba.blocks.kode_blok}
+                        {ba.blocks.tanaman_kategori && (
+                          <span className={`ml-2 text-xs px-2 py-0.5 rounded ${
+                            ba.blocks.tanaman_kategori === 'PC' 
+                              ? 'bg-green-100 text-green-700' 
+                              : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {ba.blocks.tanaman_kategori}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        {ba.blocks.nama_blok} • {ba.blocks.kawasan}
+                        {ba.blocks.varietas && ` • ${ba.blocks.varietas}`}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Total: {ba.luas_total} Ha • 
+                        Selesai: {(ba.luas_completed || 0).toFixed(2)} Ha • 
+                        Sisa: {ba.luas_remaining.toFixed(2)} Ha
+                      </div>
+                    </div>
+                  </label>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Selected Blocks Detail */}
+          {selectedBlocks.length > 0 && (
+            <div>
+              <h3 className="font-semibold text-gray-900 mb-3">Detail Pekerjaan:</h3>
+              <div className="space-y-3">
+                {selectedBlocks.map(block => (
+                  <div key={block.id} className="border border-gray-200 rounded-lg p-4">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <div className="font-medium">{block.kode_blok}</div>
+                        <div className="text-sm text-gray-600">
+                          Sisa: {block.luas_remaining.toFixed(2)} Ha
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setSelectedBlocks(selectedBlocks.filter(b => b.id !== block.id))}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                      >
+                        ✕ Hapus
+                      </button>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Luas Dikerjakan (Ha) *
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max={block.luas_remaining}
+                        value={block.luas_dikerjakan}
+                        onChange={(e) => handleLuasChange(block.id, e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                {/* Summary */}
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                  <div className="font-semibold text-green-900">
+                    Total Luas Dikerjakan: {getTotalLuasDikerjakan().toFixed(2)} Ha
+                  </div>
+                  <div className="text-sm text-green-700">
+                    {selectedBlocks.length} blok dipilih
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Transaction Form */}
+          {selectedBlocks.length > 0 && (
+            <div className="border-t pt-6">
+              <h3 className="font-semibold text-gray-900 mb-4">Informasi Transaksi:</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Tanggal Pekerjaan *
+                  </label>
+                  <input
+                    type="date"
+                    value={formData.tanggal_pekerjaan}
+                    onChange={(e) => setFormData({ ...formData, tanggal_pekerjaan: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Nama Pekerja/Kontraktor
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.worker_name}
+                    onChange={(e) => setFormData({ ...formData, worker_name: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    placeholder="Nama pekerja atau vendor"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Jumlah Pekerja
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={formData.pekerja}
+                    onChange={(e) => setFormData({ ...formData, pekerja: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Catatan
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    placeholder="Kondisi atau catatan lainnya"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setSelectedBlocks([])
+                    setFormData({
+                      tanggal_pekerjaan: new Date().toISOString().split('T')[0],
+                      worker_name: '',
+                      pekerja: '',
+                      notes: ''
+                    })
+                  }}
+                  className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={loading}
+                  className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400"
+                >
+                  {loading ? 'Menyimpan...' : '✓ Simpan Transaksi'}
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {!selectedPlan && (
+        <div className="text-center py-12 text-gray-500">
+          <div className="text-4xl mb-4">📋</div>
+          <div>Pilih rencana kerja untuk memulai transaksi</div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
