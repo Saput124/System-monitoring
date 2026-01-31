@@ -1,223 +1,166 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../utils/supabase'
 
-export default function MaterialPreview({ 
-  activityTypeId, 
-  stageId,
-  selectedBlocks, 
-  blocks 
-}) {
+export default function MaterialPreview({ activityTypeId, stageId, alternativeOption, selectedBlocks, blocks }) {
   const [materials, setMaterials] = useState([])
   const [loading, setLoading] = useState(false)
-  const [warning, setWarning] = useState('')
 
   useEffect(() => {
     if (activityTypeId && selectedBlocks.length > 0) {
-      fetchMaterialPreview()
-    } else {
-      setMaterials([])
-      setWarning('')
+      fetchMaterials()
     }
-  }, [activityTypeId, stageId, selectedBlocks])
+  }, [activityTypeId, stageId, alternativeOption, selectedBlocks])
 
-  const fetchMaterialPreview = async () => {
+  const fetchMaterials = async () => {
     setLoading(true)
-    setWarning('')
     
-    // Query SOP materials
+    // CRITICAL: Query dengan filter yang tepat
     let query = supabase
       .from('activity_materials')
-      .select('*, materials(code, name, unit)')
+      .select('*, materials(code, name, category, unit)')
       .eq('activity_type_id', activityTypeId)
-    
-    // Filter by stage
+
+    // Filter by stage jika ada
     if (stageId) {
-      query = query.eq('stage_id', stageId)
+      query = query.or(`stage_id.is.null,stage_id.eq.${stageId}`)
     } else {
       query = query.is('stage_id', null)
     }
 
-    const { data: sopMaterials, error } = await query
-    
-    console.log('🔍 Material preview query:', {
-      activity: activityTypeId,
-      stage: stageId,
-      results: sopMaterials?.length || 0,
-      error
-    })
-
-    if (error) {
-      console.error('Material query error:', error)
-      setWarning('Error loading materials: ' + error.message)
-      setLoading(false)
-      return
+    // Filter by alternative option jika ada
+    if (alternativeOption) {
+      query = query.or(`alternative_option.is.null,alternative_option.eq.${alternativeOption}`)
+    } else {
+      query = query.is('alternative_option', null)
     }
 
-    if (!sopMaterials || sopMaterials.length === 0) {
-      setWarning('⚠️ Tidak ada SOP material untuk activity/stage ini. Hubungi admin untuk setup SOP.')
+    const { data, error } = await query
+
+    if (error) {
+      console.error('Error fetching materials:', error)
       setMaterials([])
       setLoading(false)
       return
     }
 
-    // Calculate totals per material grouped by kategori
-    const materialGroups = {}
-    const skippedBlocks = { PC: [], RC: [] }
+    // Hitung total material berdasarkan blok yang dipilih
+    const selectedBlocksData = blocks.filter(b => selectedBlocks.includes(b.id))
     
-    selectedBlocks.forEach(blockId => {
-      const block = blocks.find(b => b.id === blockId)
-      if (!block) return
-      
-      let blockHasMaterial = false
-      
-      sopMaterials.forEach(am => {
-        // Filter by kategori
-        if (am.tanaman_kategori && am.tanaman_kategori !== block.kategori) {
-          if (!skippedBlocks[block.kategori].includes(block.code)) {
-            skippedBlocks[block.kategori].push(block.code)
-          }
-          return
-        }
+    // Group by kategori
+    const luasByKategori = {
+      PC: selectedBlocksData.filter(b => b.kategori === 'PC').reduce((sum, b) => sum + parseFloat(b.luas_total), 0),
+      RC: selectedBlocksData.filter(b => b.kategori === 'RC').reduce((sum, b) => sum + parseFloat(b.luas_total), 0)
+    }
 
-        blockHasMaterial = true
-        const key = `${am.material_id}_${block.kategori || 'ALL'}`
-        
-        if (!materialGroups[key]) {
-          materialGroups[key] = {
-            material_id: am.material_id,
-            code: am.materials.code,
-            name: am.materials.name,
-            unit: am.unit,
-            dosis_asli: am.default_dosis,
-            kategori: block.kategori,
-            total_quantity: 0,
-            blocks: []
-          }
-        }
-        
-        const quantity = parseFloat(am.default_dosis) * parseFloat(block.luas_total)
-        materialGroups[key].total_quantity += quantity
-        materialGroups[key].blocks.push({
-          code: block.code,
-          kategori: block.kategori,
-          luas: parseFloat(block.luas_total),
-          quantity: quantity
-        })
-      })
+    // Calculate materials
+    const calculatedMaterials = (data || []).map(m => {
+      let totalQty = 0
+
+      // Hitung berdasarkan kategori tanaman
+      if (!m.tanaman_kategori) {
+        // Material untuk semua kategori
+        totalQty = (luasByKategori.PC + luasByKategori.RC) * parseFloat(m.default_dosis)
+      } else if (m.tanaman_kategori === 'PC') {
+        totalQty = luasByKategori.PC * parseFloat(m.default_dosis)
+      } else if (m.tanaman_kategori === 'RC') {
+        totalQty = luasByKategori.RC * parseFloat(m.default_dosis)
+      }
+
+      return {
+        ...m,
+        total_quantity: totalQty.toFixed(3),
+        luas_pc: luasByKategori.PC.toFixed(2),
+        luas_rc: luasByKategori.RC.toFixed(2)
+      }
     })
 
-    setMaterials(Object.values(materialGroups))
-    
-    // Show warning if some blocks were skipped
-    const warnings = []
-    if (skippedBlocks.PC.length > 0) {
-      warnings.push(`PC blocks skipped (tidak ada SOP): ${skippedBlocks.PC.join(', ')}`)
-    }
-    if (skippedBlocks.RC.length > 0) {
-      warnings.push(`RC blocks skipped (tidak ada SOP): ${skippedBlocks.RC.join(', ')}`)
-    }
-    if (warnings.length > 0) {
-      setWarning('ℹ️ ' + warnings.join('; '))
-    }
-    
+    setMaterials(calculatedMaterials)
     setLoading(false)
-  }
 
-  if (selectedBlocks.length === 0) {
-    return (
-      <div className="bg-gray-50 rounded p-4 text-sm text-gray-600 text-center">
-        Pilih blok terlebih dahulu untuk melihat preview material
-      </div>
-    )
+    console.log('📋 Material preview:', {
+      activity: activityTypeId,
+      stage: stageId,
+      alternative: alternativeOption,
+      materials: calculatedMaterials.length,
+      pc: luasByKategori.PC,
+      rc: luasByKategori.RC
+    })
   }
 
   if (loading) {
     return (
-      <div className="bg-gray-50 rounded p-4 text-sm text-gray-600 text-center">
-        Loading material preview...
+      <div className="border rounded p-4">
+        <div className="text-center text-gray-600">Loading material preview...</div>
       </div>
     )
   }
 
-  if (warning && materials.length === 0) {
+  if (materials.length === 0) {
     return (
-      <div className="bg-yellow-50 border border-yellow-200 rounded p-4 text-sm text-yellow-800">
-        {warning}
+      <div className="border rounded p-4 bg-yellow-50 border-yellow-200">
+        <div className="text-sm text-yellow-800">
+          ℹ️ Tidak ada material SOP untuk konfigurasi ini. Activity mungkin tidak memerlukan material.
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="space-y-2">
-      {warning && (
-        <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm text-blue-800">
-          {warning}
-        </div>
-      )}
+    <div className="border rounded p-4 bg-green-50 border-green-200">
+      <h3 className="font-semibold mb-3 text-green-900">📦 Preview Material yang Dibutuhkan</h3>
       
-      <div className="border rounded-lg overflow-hidden">
-        <div className="bg-green-50 px-4 py-2 border-b">
-          <h3 className="font-semibold text-sm">📋 Preview Material Rencana</h3>
+      <div className="mb-3 text-sm text-green-800">
+        <div className="flex justify-between">
+          <span>Luas PC:</span>
+          <span className="font-medium">{materials[0]?.luas_pc || '0.00'} Ha</span>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Material</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Kategori</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Dosis/Ha</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total Rencana</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Detail</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {materials.map((m, idx) => (
-                <tr key={idx} className="hover:bg-gray-50">
-                  <td className="px-3 py-2 font-medium">{m.code} - {m.name}</td>
-                  <td className="px-3 py-2 text-center">
-                    <span className={`px-2 py-0.5 rounded text-xs ${
-                      m.kategori === 'PC' ? 'bg-blue-100 text-blue-800' : 
-                      m.kategori === 'RC' ? 'bg-green-100 text-green-800' :
-                      'bg-gray-100 text-gray-800'
-                    }`}>
-                      {m.kategori || 'ALL'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-right text-gray-600">{m.dosis_asli} {m.unit}</td>
-                  <td className="px-3 py-2 text-right font-semibold text-green-600">
-                    {m.total_quantity.toFixed(2)} {m.unit}
-                  </td>
-                  <td className="px-3 py-2">
-                    <details className="text-xs text-gray-600">
-                      <summary className="cursor-pointer hover:text-blue-600 select-none">
-                        {m.blocks.length} blok →
-                      </summary>
-                      <ul className="mt-1 ml-4 space-y-1">
-                        {m.blocks.map((b, i) => (
-                          <li key={i}>
-                            {b.code} ({b.kategori}): {b.luas} Ha × {m.dosis_asli} = {b.quantity.toFixed(2)} {m.unit}
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot className="bg-gray-50">
-              <tr className="font-semibold">
-                <td colSpan="3" className="px-3 py-2 text-right">Total Jenis Material:</td>
-                <td className="px-3 py-2 text-right text-blue-600">{materials.length} jenis</td>
-                <td></td>
-              </tr>
-            </tfoot>
-          </table>
+        <div className="flex justify-between">
+          <span>Luas RC:</span>
+          <span className="font-medium">{materials[0]?.luas_rc || '0.00'} Ha</span>
         </div>
       </div>
-      
-      <div className="text-xs text-gray-600 bg-gray-50 rounded p-2">
-        💡 <strong>Catatan:</strong> Material akan otomatis dihitung saat rencana disimpan.
-        Pastikan jumlah sesuai dengan kebutuhan lapangan.
+
+      <div className="space-y-2">
+        {materials.map((m, idx) => (
+          <div key={idx} className="bg-white rounded p-3 border border-green-200">
+            <div className="flex justify-between items-start">
+              <div className="flex-1">
+                <div className="font-medium">{m.materials.code} - {m.materials.name}</div>
+                <div className="text-xs text-gray-600 flex items-center gap-2 mt-1">
+                  <span className="px-2 py-0.5 bg-gray-100 rounded">{m.materials.category}</span>
+                  {m.tanaman_kategori && (
+                    <span className={`px-2 py-0.5 rounded ${
+                      m.tanaman_kategori === 'PC' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
+                    }`}>
+                      {m.tanaman_kategori} only
+                    </span>
+                  )}
+                  {m.alternative_option && (
+                    <span className="px-2 py-0.5 bg-purple-100 text-purple-800 rounded">
+                      {m.alternative_option}
+                    </span>
+                  )}
+                  {m.required && (
+                    <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded">
+                      Wajib
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs text-gray-600 mt-1">
+                  Dosis: {m.default_dosis} {m.unit}/Ha
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-lg font-bold text-green-600">{m.total_quantity}</div>
+                <div className="text-xs text-gray-600">{m.unit}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 text-xs text-green-800 bg-green-100 rounded p-2">
+        💡 <strong>Catatan:</strong> Quantity akan otomatis dihitung saat membuat transaksi berdasarkan luas aktual yang dikerjakan.
       </div>
     </div>
   )
