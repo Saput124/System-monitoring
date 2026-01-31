@@ -6,6 +6,7 @@ export default function WorkPlanRegistration({ user }) {
   const [activeTab, setActiveTab] = useState('rencana')
   const [showModal, setShowModal] = useState(false)
   
+
   // Master data
   const [sections, setSections] = useState([])
   const [activities, setActivities] = useState([])
