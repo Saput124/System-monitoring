@@ -1,9 +1,19 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import TransactionInput from './TransactionInput'
 import TransactionHistory from './TransactionHistory'
 
 export default function Transaction({ user }) {
   const [activeTab, setActiveTab] = useState('input')
+  const historyRef = useRef()
+
+  // 🔥 FIX: Callback untuk refresh history setelah transaksi berhasil
+  const handleTransactionSuccess = () => {
+    // Switch ke history tab dan trigger refresh
+    setActiveTab('history')
+    if (historyRef.current && historyRef.current.refreshData) {
+      historyRef.current.refreshData()
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -28,7 +38,17 @@ export default function Transaction({ user }) {
         </div>
 
         <div className="p-6">
-          {activeTab === 'input' ? <TransactionInput user={user} /> : <TransactionHistory user={user} />}
+          {activeTab === 'input' ? (
+            <TransactionInput 
+              user={user} 
+              onTransactionSuccess={handleTransactionSuccess}
+            />
+          ) : (
+            <TransactionHistory 
+              user={user} 
+              ref={historyRef}
+            />
+          )}
         </div>
       </div>
     </div>
