@@ -40,7 +40,12 @@ export default function WorkPlanRegistration({ user }) {
   useEffect(() => {
     fetchMasterData()
     fetchPlans()
-    if (activeTab === 'material') fetchMaterialSummary()
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'material') {
+      fetchMaterialSummary()
+    }
   }, [activeTab])
   
   useEffect(() => {
@@ -433,7 +438,7 @@ export default function WorkPlanRegistration({ user }) {
           }
         }
         
-        const quantity = parseFloat(sop.dosis_per_ha) * parseFloat(block.luas_total)
+        const quantity = parseFloat(sop.default_dosis) * parseFloat(block.luas_total)
         materialGroups[key].total_quantity += quantity
       })
     })
@@ -519,11 +524,13 @@ export default function WorkPlanRegistration({ user }) {
                 <div className="space-y-2">
                   {plans.map(plan => {
                     const isExpanded = expandedPlanId === plan.id
-                    const totalLuas = expandedBlockActivities.reduce((s, ba) => s + parseFloat(ba.luas_total || 0), 0)
-                    const totalSelesai = expandedBlockActivities.reduce((s, ba) => s + parseFloat(ba.luas_completed || 0), 0)
+                    
+                    // Only calculate stats for the currently expanded plan
+                    const totalLuas = isExpanded ? expandedBlockActivities.reduce((s, ba) => s + parseFloat(ba.luas_total || 0), 0) : 0
+                    const totalSelesai = isExpanded ? expandedBlockActivities.reduce((s, ba) => s + parseFloat(ba.luas_completed || 0), 0) : 0
                     const totalSisa = totalLuas - totalSelesai
                     const progressPct = totalLuas > 0 ? (totalSelesai / totalLuas) * 100 : 0
-                    const blokSelesai = expandedBlockActivities.filter(ba => ba.status === 'completed').length
+                    const blokSelesai = isExpanded ? expandedBlockActivities.filter(ba => ba.status === 'completed').length : 0
                     
                     return (
                       <div key={plan.id} className="border rounded-lg overflow-hidden hover:shadow-md transition-shadow">
@@ -605,7 +612,10 @@ export default function WorkPlanRegistration({ user }) {
                               <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Blok Kerja</div>
                               <div className="space-y-2">
                                 {expandedBlockActivities.map(ba => {
-                                  const blokProgress = ba.luas_total > 0 ? ((ba.luas_completed || 0) / ba.luas_total) * 100 : 0
+                                  const baCompleted = parseFloat(ba.luas_completed || 0)
+                                  const baTotal = parseFloat(ba.luas_total || 0)
+                                  const baSisa = Math.max(0, baTotal - baCompleted)
+                                  const blokProgress = baTotal > 0 ? (baCompleted / baTotal) * 100 : 0
                                   return (
                                     <div key={ba.id} className="bg-white border rounded p-3">
                                       <div className="flex justify-between items-start mb-2">
@@ -625,9 +635,9 @@ export default function WorkPlanRegistration({ user }) {
                                         <div className="bg-green-500 h-1.5 rounded-full" style={{ width: `${blokProgress}%` }} />
                                       </div>
                                       <div className="flex gap-4 text-xs text-gray-600">
-                                        <span>Total: <span className="font-medium text-gray-800">{parseFloat(ba.luas_total).toFixed(2)} Ha</span></span>
-                                        <span>Selesai: <span className="font-medium text-green-700">{parseFloat(ba.luas_completed || 0).toFixed(2)} Ha</span></span>
-                                        <span>Sisa: <span className="font-medium text-orange-700">{parseFloat(ba.luas_remaining || ba.luas_total).toFixed(2)} Ha</span></span>
+                                        <span>Total: <span className="font-medium text-gray-800">{baTotal.toFixed(2)} Ha</span></span>
+                                        <span>Selesai: <span className="font-medium text-green-700">{baCompleted.toFixed(2)} Ha</span></span>
+                                        <span>Sisa: <span className="font-medium text-orange-700">{baSisa.toFixed(2)} Ha</span></span>
                                       </div>
                                     </div>
                                   )
