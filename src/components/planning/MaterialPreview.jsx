@@ -27,7 +27,7 @@ export default function MaterialPreview({
     // Query SOP materials
     let query = supabase
       .from('activity_materials')
-      .select('*, materials(code, name, unit)')
+      .select('*, materials(code, name, unit), activity_stages(kategori)')
       .eq('activity_id', activityId)
     
     // Filter by stage
@@ -69,8 +69,9 @@ export default function MaterialPreview({
       let blockHasMaterial = false
       
       sopMaterials.forEach(am => {
-        // Filter by kategori
-        if (am.tanaman_kategori && am.tanaman_kategori !== block.kategori) {
+        // Filter by stage kategori - skip if block doesn't match stage kategori
+        const stageKategori = am.activity_stages?.kategori
+        if (stageKategori && stageKategori !== 'ALL' && stageKategori !== block.kategori) {
           if (!skippedBlocks[block.kategori].includes(block.code)) {
             skippedBlocks[block.kategori].push(block.code)
           }
