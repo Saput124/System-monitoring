@@ -18,9 +18,9 @@ export default function WorkPlanRegistration({ user }) {
   // Form state
   const [formData, setFormData] = useState({
     section_id: user.section_id || '',
-    activity_type_id: '',
+    activity_id: '',
     vendor_id: '',
-    target_bulan: new Date().toISOString().slice(0, 7) + '-01',
+    target_date: new Date().toISOString().slice(0, 10),
     stage_id: '',
     selectedBlocks: []
   })
@@ -48,7 +48,7 @@ export default function WorkPlanRegistration({ user }) {
   const fetchMasterData = async () => {
     const [s, a, v, b] = await Promise.all([
       supabase.from('sections').select('*').eq('active', true),
-      supabase.from('activity_types').select('*').eq('active', true),
+      supabase.from('activities').select('*, sections(name)').eq('active', true),
       supabase.from('vendors').select('*').eq('active', true),
       supabase.from('blocks').select('*').eq('active', true).order('code')
     ])
@@ -66,36 +66,28 @@ export default function WorkPlanRegistration({ user }) {
     let query = supabase
       .from('activity_stages')
       .select('*')
-      .eq('activity_type_id', formData.activity_type_id)
+      .eq('activity_id', formData.activity_id)
       .order('sequence_order')
     
-    // Filter by kategori if applicable
+    // Filter by kategori
     if (hasPC && !hasRC) {
-      query = query.or('for_kategori.is.null,for_kategori.eq.PC')
+      query = query.in('kategori', ['PC', 'ALL'])
     } else if (hasRC && !hasPC) {
-      query = query.or('for_kategori.is.null,for_kategori.eq.RC')
+      query = query.in('kategori', ['RC', 'ALL'])
     }
-    // If both, show all stages
     
     const { data } = await query
     setStages(data || [])
-    
-    console.log('📋 Stages loaded:', {
-      activity: activities.find(a => a.id === formData.activity_type_id)?.name,
-      hasPC, hasRC,
-      stages: data?.length || 0
-    })
   }
   
   const checkVendorRequirement = async () => {
-    const activity = activities.find(a => a.id === formData.activity_type_id)
+    const activity = activities.find(a => a.id === formData.activity_id)
     if (activity?.requires_vendor) {
-      // Auto-assign vendor from assignment
       const { data } = await supabase
         .from('vendor_assignments')
         .select('vendor_id')
         .eq('section_id', formData.section_id)
-        .eq('activity_type_id', formData.activity_type_id)
+        .eq('activity_id', formData.activity_id)
         .single()
       
       if (data) {
@@ -132,7 +124,7 @@ export default function WorkPlanRegistration({ user }) {
       .select(`
         *,
         sections(name),
-        activity_types(name, requires_material),
+        activities(name),
         vendors(name),
         activity_stages(name)
       `)
@@ -168,10 +160,8 @@ export default function WorkPlanRegistration({ user }) {
   
   const validateForm = () => {
     const errors = []
-    const { PC, RC } = blockSummary
-    const activity = activities.find(a => a.id === formData.activity_type_id)
     
-    if (!formData.activity_type_id) {
+    if (!formData.activity_id) {
       errors.push('Pilih activity terlebih dahulu')
     }
     
@@ -179,20 +169,8 @@ export default function WorkPlanRegistration({ user }) {
       errors.push('Pilih minimal 1 blok')
     }
     
-    // Check kategori conflict for specific stages
-    const selectedStage = stages.find(s => s.id === formData.stage_id)
-    if (selectedStage) {
-      if (selectedStage.for_kategori === 'PC' && RC.count > 0) {
-        errors.push(`⚠️ Stage "${selectedStage.name}" hanya untuk PC, tapi Anda pilih blok RC. Hapus blok RC atau buat rencana terpisah.`)
-      }
-      if (selectedStage.for_kategori === 'RC' && PC.count > 0) {
-        errors.push(`⚠️ Stage "${selectedStage.name}" hanya untuk RC, tapi Anda pilih blok PC. Hapus blok PC atau buat rencana terpisah.`)
-      }
-    }
-    
-    // Check if stage required but not selected
-    if (stages.length > 0 && !formData.stage_id && activity?.requires_material) {
-      errors.push('Pilih stage/metode untuk activity ini')
+    if (!formData.stage_id) {
+      errors.push('Pilih stage')
     }
     
     return errors
@@ -205,19 +183,15 @@ export default function WorkPlanRegistration({ user }) {
       return
     }
     
-    const activity = activities.find(a => a.id === formData.activity_type_id)
-    
-    console.log('💾 Submitting plan:', formData)
-    
     // Create activity plan
     const { data: plan, error: planError } = await supabase
       .from('activity_plans')
       .insert({
         section_id: formData.section_id,
-        activity_type_id: formData.activity_type_id,
+        activity_id: formData.activity_id,
         vendor_id: formData.vendor_id || null,
-        target_bulan: formData.target_bulan,
-        stage_id: formData.stage_id || null,
+        target_date: formData.target_date,
+        stage_id: formData.stage_id,
         status: 'approved',
         created_by: user.id
       })
@@ -225,12 +199,9 @@ export default function WorkPlanRegistration({ user }) {
       .single()
     
     if (planError) {
-      alert('❌ Error creating plan: ' + planError.message)
-      console.error(planError)
+      alert('❌ Error: ' + planError.message)
       return
     }
-    
-    console.log('✅ Plan created:', plan.id)
     
     // Insert block activities
     const blockActivities = formData.selectedBlocks.map(blockId => {
@@ -244,58 +215,25 @@ export default function WorkPlanRegistration({ user }) {
       }
     })
     
-    const { error: blockError } = await supabase
-      .from('block_activities')
-      .insert(blockActivities)
+    await supabase.from('block_activities').insert(blockActivities)
     
-    if (blockError) {
-      alert('❌ Error creating block activities: ' + blockError.message)
-      console.error(blockError)
-      return
-    }
+    // Calculate materials
+    await calculateAndInsertMaterials(plan.id)
     
-    console.log('✅ Block activities created:', blockActivities.length)
-    
-    // Calculate and insert planned materials
-    if (activity?.requires_material) {
-      await calculateAndInsertMaterials(plan.id)
-    }
-    
-    alert('✅ Rencana kerja berhasil dibuat!')
+    alert('✅ Rencana berhasil dibuat!')
     setShowModal(false)
     fetchPlans()
-    handleNewPlan()
   }
   
   const calculateAndInsertMaterials = async (planId) => {
-    // Query SOP materials
-    let materialQuery = supabase
+    const { data: sopMaterials } = await supabase
       .from('activity_materials')
       .select('*, materials(code, name, unit)')
-      .eq('activity_type_id', formData.activity_type_id)
+      .eq('activity_id', formData.activity_id)
+      .eq('stage_id', formData.stage_id)
     
-    // Filter by stage
-    if (formData.stage_id) {
-      materialQuery = materialQuery.eq('stage_id', formData.stage_id)
-    } else {
-      materialQuery = materialQuery.is('stage_id', null)
-    }
+    if (!sopMaterials || sopMaterials.length === 0) return
     
-    const { data: sopMaterials, error: sopError } = await materialQuery
-    
-    console.log('🔍 SOP query:', {
-      activity: formData.activity_type_id,
-      stage: formData.stage_id,
-      results: sopMaterials?.length || 0,
-      error: sopError
-    })
-    
-    if (!sopMaterials || sopMaterials.length === 0) {
-      console.warn('⚠️ No SOP materials found')
-      return
-    }
-    
-    // Calculate totals
     const materialGroups = {}
     
     formData.selectedBlocks.forEach(blockId => {
@@ -303,17 +241,10 @@ export default function WorkPlanRegistration({ user }) {
       if (!block) return
       
       sopMaterials.forEach(sop => {
-        // Filter by kategori
-        if (sop.tanaman_kategori && sop.tanaman_kategori !== block.kategori) {
-          console.log(`⏩ Skip ${sop.materials?.name} for ${block.code}: kategori ${sop.tanaman_kategori} != ${block.kategori}`)
-          return
-        }
-        
         const key = sop.material_id
         if (!materialGroups[key]) {
           materialGroups[key] = {
             material_id: sop.material_id,
-            name: sop.materials?.name,
             total_quantity: 0,
             unit: sop.unit
           }
@@ -321,8 +252,6 @@ export default function WorkPlanRegistration({ user }) {
         
         const quantity = parseFloat(sop.default_dosis) * parseFloat(block.luas_total)
         materialGroups[key].total_quantity += quantity
-        
-        console.log(`✅ ${sop.materials?.name} for ${block.code}: ${sop.default_dosis} × ${block.luas_total} = ${quantity.toFixed(2)}`)
       })
     })
     
@@ -334,19 +263,8 @@ export default function WorkPlanRegistration({ user }) {
       unit: m.unit
     }))
     
-    console.log('💾 Inserting materials:', plannedMaterials)
-    
     if (plannedMaterials.length > 0) {
-      const { error: matError } = await supabase
-        .from('planned_materials')
-        .insert(plannedMaterials)
-      
-      if (matError) {
-        console.error('❌ Material insert error:', matError)
-        alert('⚠️ Warning: Material calculation failed. ' + matError.message)
-      } else {
-        console.log(`✅ ${plannedMaterials.length} materials inserted`)
-      }
+      await supabase.from('planned_materials').insert(plannedMaterials)
     }
   }
   
@@ -415,11 +333,11 @@ export default function WorkPlanRegistration({ user }) {
                   <tbody className="divide-y divide-gray-200">
                     {plans.map(plan => (
                       <tr key={plan.id}>
-                        <td className="px-4 py-3 text-sm font-medium">{plan.activity_types?.name}</td>
+                        <td className="px-4 py-3 text-sm font-medium">{plan.activities?.name}</td>
                         <td className="px-4 py-3 text-sm">{plan.activity_stages?.name || '-'}</td>
                         <td className="px-4 py-3 text-sm">{plan.sections?.name}</td>
                         <td className="px-4 py-3 text-sm">{plan.vendors?.name || '-'}</td>
-                        <td className="px-4 py-3 text-sm">{new Date(plan.target_bulan).toLocaleDateString('id-ID', { year: 'numeric', month: 'long' })}</td>
+                        <td className="px-4 py-3 text-sm">{new Date(plan.target_date).toLocaleDateString('id-ID')}</td>
                         <td className="px-4 py-3 text-sm">
                           <span className={`px-2 py-1 rounded text-xs ${
                             plan.status === 'completed' ? 'bg-green-100 text-green-800' :
@@ -491,11 +409,11 @@ export default function WorkPlanRegistration({ user }) {
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium mb-1">Target Bulan *</label>
+                  <label className="block text-sm font-medium mb-1">Target Tanggal *</label>
                   <input
-                    type="month"
-                    value={formData.target_bulan.slice(0, 7)}
-                    onChange={(e) => setFormData({...formData, target_bulan: e.target.value + '-01'})}
+                    type="date"
+                    value={formData.target_date}
+                    onChange={(e) => setFormData({...formData, target_date: e.target.value})}
                     className="w-full px-3 py-2 border rounded"
                   />
                 </div>
@@ -504,12 +422,12 @@ export default function WorkPlanRegistration({ user }) {
               <div>
                 <label className="block text-sm font-medium mb-1">Activity *</label>
                 <select
-                  value={formData.activity_type_id}
-                  onChange={(e) => setFormData({...formData, activity_type_id: e.target.value, stage_id: ''})}
+                  value={formData.activity_id}
+                  onChange={(e) => setFormData({...formData, activity_id: e.target.value, stage_id: ''})}
                   className="w-full px-3 py-2 border rounded"
                 >
                   <option value="">Pilih Activity</option>
-                  {activities.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  {activities.filter(a => a.section_id === formData.section_id).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </div>
               
@@ -618,9 +536,9 @@ export default function WorkPlanRegistration({ user }) {
                 </div>
               </div>
               
-              {formData.activity_type_id && formData.selectedBlocks.length > 0 && (
+              {formData.activity_id && formData.selectedBlocks.length > 0 && (
                 <MaterialPreview
-                  activityTypeId={formData.activity_type_id}
+                  activityId={formData.activity_id}
                   stageId={formData.stage_id}
                   selectedBlocks={formData.selectedBlocks}
                   blocks={blocks}
