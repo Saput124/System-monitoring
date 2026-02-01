@@ -169,8 +169,9 @@ export default function WorkPlanRegistration({ user }) {
       errors.push('Pilih minimal 1 blok')
     }
     
-    if (!formData.stage_id) {
-      errors.push('Pilih stage')
+    // If stages available but none selected
+    if (stages.length > 0 && !formData.stage_id) {
+      errors.push('Pilih salah satu stage yang tersedia')
     }
     
     return errors
@@ -191,7 +192,7 @@ export default function WorkPlanRegistration({ user }) {
         activity_id: formData.activity_id,
         vendor_id: formData.vendor_id || null,
         target_date: formData.target_date,
-        stage_id: formData.stage_id,
+        stage_id: formData.stage_id || null,
         status: 'approved',
         created_by: user.id
       })
@@ -217,12 +218,15 @@ export default function WorkPlanRegistration({ user }) {
     
     await supabase.from('block_activities').insert(blockActivities)
     
-    // Calculate materials
-    await calculateAndInsertMaterials(plan.id)
+    // Calculate materials if stage selected
+    if (formData.stage_id) {
+      await calculateAndInsertMaterials(plan.id)
+    }
     
     alert('✅ Rencana berhasil dibuat!')
     setShowModal(false)
     fetchPlans()
+    handleNewPlan()
   }
   
   const calculateAndInsertMaterials = async (planId) => {
@@ -280,7 +284,20 @@ export default function WorkPlanRegistration({ user }) {
     setShowModal(true)
   }
   
-  const selectedActivity = activities.find(a => a.id === formData.activity_type_id)
+  const handleNewPlan = () => {
+    setFormData({
+      section_id: user.section_id || '',
+      activity_id: '',
+      vendor_id: '',
+      target_date: new Date().toISOString().slice(0, 10),
+      stage_id: '',
+      selectedBlocks: []
+    })
+    setStages([])
+    setShowModal(true)
+  }
+  
+  const selectedActivity = activities.find(a => a.id === formData.activity_id)
   const showStageDropdown = stages.length > 0
   const hasNoStage = !showStageDropdown && selectedActivity?.requires_material
   
@@ -431,6 +448,18 @@ export default function WorkPlanRegistration({ user }) {
                 </select>
               </div>
               
+              {formData.activity_id && stages.length > 0 && (
+                <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm">
+                  ✅ Tersedia {stages.length} stage dari Assignment. Pilih salah satu di bawah.
+                </div>
+              )}
+              
+              {formData.activity_id && stages.length === 0 && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded p-3 text-sm">
+                  ⚠️ Belum ada stage untuk activity ini. Setup dulu di Assignment!
+                </div>
+              )}
+              
               {selectedActivity?.requires_vendor && (
                 <div>
                   <label className="block text-sm font-medium mb-1">Vendor</label>
@@ -447,27 +476,32 @@ export default function WorkPlanRegistration({ user }) {
               
               {showStageDropdown && (
                 <div>
-                  <label className="block text-sm font-medium mb-1">
-                    Stage / Metode * 
-                    {blockSummary.PC.count > 0 && blockSummary.RC.count > 0 && (
-                      <span className="text-xs text-orange-600 ml-2">
-                        (PC: {blockSummary.PC.count} blok, RC: {blockSummary.RC.count} blok)
-                      </span>
-                    )}
+                  <label className="block text-sm font-medium mb-2">
+                    Stage (pilih salah satu) *
                   </label>
-                  <select
-                    value={formData.stage_id}
-                    onChange={(e) => setFormData({...formData, stage_id: e.target.value})}
-                    className="w-full px-3 py-2 border rounded"
-                  >
-                    <option value="">Pilih Stage</option>
+                  <div className="border rounded p-4 space-y-2 max-h-40 overflow-y-auto">
                     {stages.map(s => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                        {s.for_kategori && ` (${s.for_kategori} only)`}
-                      </option>
+                      <label key={s.id} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer">
+                        <input
+                          type="radio"
+                          name="stage"
+                          checked={formData.stage_id === s.id}
+                          onChange={() => setFormData({...formData, stage_id: s.id})}
+                          className="w-4 h-4"
+                        />
+                        <div className="flex-1">
+                          <div className="font-medium">{s.name}</div>
+                          {s.kategori && s.kategori !== 'ALL' && (
+                            <span className={`text-xs px-2 py-0.5 rounded ${
+                              s.kategori === 'PC' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
+                            }`}>
+                              {s.kategori} only
+                            </span>
+                          )}
+                        </div>
+                      </label>
                     ))}
-                  </select>
+                  </div>
                 </div>
               )}
               
