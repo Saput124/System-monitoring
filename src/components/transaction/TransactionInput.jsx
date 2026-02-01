@@ -12,6 +12,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
     catatan: ''
   })
   const [loading, setLoading] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     fetchPlans()
@@ -95,6 +96,12 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
   }
 
   const handleSubmit = async () => {
+    // 🔥 CRITICAL: Prevent double submission
+    if (submitting) {
+      console.log('Already submitting, please wait...')
+      return
+    }
+
     if (selectedBlocks.length === 0) {
       alert('❌ Pilih minimal 1 blok!')
       return
@@ -105,128 +112,177 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
       return
     }
 
-    // 🔥 FIX: Re-fetch FRESH block_activities sebelum validasi
-    const { data: freshBlocks } = await supabase
-      .from('block_activities')
-      .select('*')
-      .in('id', selectedBlocks.map(b => b.id))
-
-    // Validate luas dikerjakan dengan data FRESH
-    for (const block of selectedBlocks) {
-      const parsed = parseFloat(block.luas_dikerjakan)
-      if (isNaN(parsed) || parsed <= 0) {
-        alert(`❌ Luas dikerjakan untuk ${block.code} harus > 0`)
-        return
-      }
-      
-      // Cek sisa dari data fresh di DB
-      const freshBlock = freshBlocks?.find(fb => fb.id === block.id)
-      if (!freshBlock) {
-        alert(`❌ Data blok ${block.code} tidak ditemukan!`)
-        return
-      }
-      
-      const currentRemaining = parseFloat(freshBlock.luas_remaining)
-      
-      if (parsed > currentRemaining) {
-        alert(`❌ Luas dikerjakan untuk ${block.code} (${parsed} Ha) melebihi sisa yang tersedia (${currentRemaining.toFixed(2)} Ha).\n\nSilakan refresh halaman atau kurangi nilai input.`)
-        
-        // Auto-refresh block activities untuk update UI
-        await fetchBlockActivities()
-        return
-      }
-    }
-
+    setSubmitting(true)
     setLoading(true)
 
     try {
-      // 1. Insert 1 transaction untuk plan ini
-      const { data: transaction, error: txError } = await supabase
-        .from('transactions')
-        .insert({
-          activity_plan_id: selectedPlan.id,
-          transaction_date: formData.tanggal,
-          jumlah_pekerja: formData.jumlah_pekerja ? parseInt(formData.jumlah_pekerja) : null,
-          catatan: formData.catatan || null,
-          created_by: user.id
-        })
-        .select()
-        .single()
+      // 🔥 STEP 1: Validate dengan FRESH data
+      const { data: freshBlocks, error: fetchError } = await supabase
+        .from('block_activities')
+        .select('*')
+        .in('id', selectedBlocks.map(b => b.id))
 
-      if (txError) throw txError
+      if (fetchError) {
+        throw new Error(`Gagal mengambil data: ${fetchError.message}`)
+      }
 
-      // 2. Insert transaction_blocks per blok yang dipilih
-      const blockInserts = selectedBlocks.map(block => ({
-        transaction_id: transaction.id,
-        block_id: block.block_id,
-        luas_dikerjakan: parseFloat(block.luas_dikerjakan)
-      }))
-
-      const { error: blockError } = await supabase
-        .from('transaction_blocks')
-        .insert(blockInserts)
-
-      if (blockError) throw blockError
-
-      // 3. Insert transaction_materials kalau activity requires material
-      if (selectedPlan.activities?.requires_material) {
-        let matQuery = supabase
-          .from('activity_materials')
-          .select('*, materials(code, name, unit)')
-          .eq('activity_id', selectedPlan.activity_id)
-
-        if (selectedPlan.stage_id) {
-          matQuery = matQuery.eq('stage_id', selectedPlan.stage_id)
+      // Validate setiap blok
+      const validationErrors = []
+      
+      for (const block of selectedBlocks) {
+        const parsed = parseFloat(block.luas_dikerjakan)
+        
+        if (isNaN(parsed) || parsed <= 0) {
+          validationErrors.push(`Luas dikerjakan untuk ${block.code} harus > 0`)
+          continue
         }
-
-        const { data: sopMaterials } = await matQuery
-
-        if (sopMaterials && sopMaterials.length > 0) {
-          const materialTotals = {}
-
-          selectedBlocks.forEach(block => {
-            const blockData = blockActivities.find(ba => ba.id === block.id)
-            const luasDikerjakan = parseFloat(block.luas_dikerjakan)
-
-            sopMaterials.forEach(sop => {
-              const materialId = sop.material_id
-              const dosis = parseFloat(sop.dosis_per_ha)
-
-              // Filter by kategori if specified
-              if (sop.kategori_blok && sop.kategori_blok !== 'ALL' && sop.kategori_blok !== blockData.blocks.kategori) {
-                return
-              }
-
-              const qty = dosis * luasDikerjakan
-
-              if (!materialTotals[materialId]) {
-                materialTotals[materialId] = {
-                  material_id: materialId,
-                  unit: sop.materials.unit,
-                  quantity: 0
-                }
-              }
-              materialTotals[materialId].quantity += qty
-            })
-          })
-
-          const materialInserts = Object.values(materialTotals).map(mat => ({
-            transaction_id: transaction.id,
-            material_id: mat.material_id,
-            quantity_used: mat.quantity,
-            unit: mat.unit
-          }))
-
-          if (materialInserts.length > 0) {
-            const { error: matError } = await supabase
-              .from('transaction_materials')
-              .insert(materialInserts)
-
-            if (matError) throw matError
-          }
+        
+        const freshBlock = freshBlocks?.find(fb => fb.id === block.id)
+        if (!freshBlock) {
+          validationErrors.push(`Data blok ${block.code} tidak ditemukan!`)
+          continue
+        }
+        
+        const currentRemaining = parseFloat(freshBlock.luas_remaining)
+        
+        if (parsed > currentRemaining) {
+          validationErrors.push(
+            `Luas dikerjakan untuk ${block.code} (${parsed.toFixed(2)} Ha) ` +
+            `melebihi sisa yang tersedia (${currentRemaining.toFixed(2)} Ha)`
+          )
         }
       }
 
+      // 🔥 CRITICAL: Jika ada error validasi, STOP dan refresh UI
+      if (validationErrors.length > 0) {
+        alert('❌ VALIDASI GAGAL:\n\n' + validationErrors.join('\n') + '\n\nData UI akan di-refresh.')
+        await fetchBlockActivities()
+        setSubmitting(false)
+        setLoading(false)
+        return // STOP EXECUTION
+      }
+
+      // 🔥 STEP 2: Insert transaction (dalam try-catch terpisah)
+      let transaction
+      try {
+        const { data: txData, error: txError } = await supabase
+          .from('transactions')
+          .insert({
+            activity_plan_id: selectedPlan.id,
+            transaction_date: formData.tanggal,
+            jumlah_pekerja: formData.jumlah_pekerja ? parseInt(formData.jumlah_pekerja) : null,
+            catatan: formData.catatan || null,
+            created_by: user.id
+          })
+          .select()
+          .single()
+
+        if (txError) throw txError
+        transaction = txData
+        
+      } catch (txError) {
+        throw new Error(`Gagal membuat transaksi: ${txError.message}`)
+      }
+
+      // 🔥 STEP 3: Insert transaction_blocks
+      try {
+        const blockInserts = selectedBlocks.map(block => ({
+          transaction_id: transaction.id,
+          block_id: block.block_id,
+          luas_dikerjakan: parseFloat(block.luas_dikerjakan)
+        }))
+
+        const { error: blockError } = await supabase
+          .from('transaction_blocks')
+          .insert(blockInserts)
+
+        if (blockError) throw blockError
+        
+      } catch (blockError) {
+        // Rollback: delete transaction
+        await supabase.from('transactions').delete().eq('id', transaction.id)
+        throw new Error(`Gagal menyimpan block data: ${blockError.message}`)
+      }
+
+      // 🔥 STEP 4: Insert transaction_materials (dengan validasi null)
+      if (selectedPlan.activities?.requires_material) {
+        try {
+          let matQuery = supabase
+            .from('activity_materials')
+            .select('*, materials(code, name, unit)')
+            .eq('activity_id', selectedPlan.activity_id)
+
+          if (selectedPlan.stage_id) {
+            matQuery = matQuery.eq('stage_id', selectedPlan.stage_id)
+          }
+
+          const { data: sopMaterials } = await matQuery
+
+          if (sopMaterials && sopMaterials.length > 0) {
+            const materialTotals = {}
+
+            selectedBlocks.forEach(block => {
+              const blockData = blockActivities.find(ba => ba.id === block.id)
+              const luasDikerjakan = parseFloat(block.luas_dikerjakan)
+
+              sopMaterials.forEach(sop => {
+                const materialId = sop.material_id
+                const dosis = parseFloat(sop.dosis_per_ha)
+
+                // 🔥 CRITICAL: Validate dosis tidak null/0
+                if (!dosis || isNaN(dosis)) {
+                  console.warn(`Dosis untuk material ${sop.materials?.code} adalah 0 atau null, skip`)
+                  return
+                }
+
+                // Filter by kategori if specified
+                if (sop.kategori_blok && sop.kategori_blok !== 'ALL' && sop.kategori_blok !== blockData.blocks.kategori) {
+                  return
+                }
+
+                const qty = dosis * luasDikerjakan
+
+                if (!materialTotals[materialId]) {
+                  materialTotals[materialId] = {
+                    material_id: materialId,
+                    unit: sop.materials.unit,
+                    quantity: 0
+                  }
+                }
+                materialTotals[materialId].quantity += qty
+              })
+            })
+
+            const materialInserts = Object.values(materialTotals)
+              .filter(mat => mat.quantity > 0) // 🔥 Filter out zero quantities
+              .map(mat => ({
+                transaction_id: transaction.id,
+                material_id: mat.material_id,
+                quantity_used: parseFloat(mat.quantity.toFixed(3)), // 🔥 Ensure not null
+                unit: mat.unit
+              }))
+
+            if (materialInserts.length > 0) {
+              const { error: matError } = await supabase
+                .from('transaction_materials')
+                .insert(materialInserts)
+
+              if (matError) {
+                // Rollback: delete transaction_blocks dan transaction
+                await supabase.from('transaction_blocks').delete().eq('transaction_id', transaction.id)
+                await supabase.from('transactions').delete().eq('id', transaction.id)
+                throw matError
+              }
+            }
+          }
+          
+        } catch (matError) {
+          // Rollback sudah dilakukan di catch block di atas
+          throw new Error(`Gagal menyimpan material: ${matError.message}`)
+        }
+      }
+
+      // 🔥 SUCCESS!
       alert('✅ Transaksi berhasil disimpan!')
       
       // Reset form
@@ -237,20 +293,25 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
         catatan: ''
       })
       
-      // Refresh block activities untuk update UI dengan data terbaru
+      // Refresh block activities
       await fetchBlockActivities()
       
-      // 🔥 FIX: Trigger callback untuk refresh history tab
+      // Trigger callback untuk refresh history
       if (onTransactionSuccess) {
         onTransactionSuccess()
       }
 
     } catch (error) {
       console.error('Error saving transaction:', error)
-      alert(`❌ Gagal menyimpan transaksi: ${error.message}`)
+      alert(`❌ Gagal menyimpan transaksi:\n\n${error.message}\n\nTransaksi telah dibatalkan (rollback).`)
+      
+      // Refresh UI untuk tampilkan data terbaru
+      await fetchBlockActivities()
+      
+    } finally {
+      setSubmitting(false)
+      setLoading(false)
     }
-
-    setLoading(false)
   }
 
   return (
@@ -267,6 +328,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                 setSelectedBlocks([])
               }}
               className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
+              disabled={submitting}
             >
               <option value="">-- Pilih Rencana --</option>
               {plans.map(p => (
@@ -322,6 +384,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                               type="checkbox"
                               checked={!!selected}
                               onChange={() => handleBlockToggle(ba)}
+                              disabled={submitting}
                               className="w-5 h-5 mt-1"
                             />
                             <div className="flex-1">
@@ -364,7 +427,8 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                                     value={selected.luas_dikerjakan}
                                     onChange={(e) => handleLuasChange(ba.id, e.target.value)}
                                     onFocus={(e) => e.target.select()}
-                                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
+                                    disabled={submitting}
+                                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                                     placeholder={`Maksimal ${ba.luas_remaining.toFixed(2)} Ha`}
                                   />
                                   <div className="text-xs text-orange-600 mt-1 font-medium">
@@ -390,7 +454,8 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                         type="date" 
                         value={formData.tanggal} 
                         onChange={(e) => setFormData({...formData, tanggal: e.target.value})} 
-                        className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500" 
+                        disabled={submitting}
+                        className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100" 
                       />
                     </div>
                     <div>
@@ -400,7 +465,8 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                         min="0"
                         value={formData.jumlah_pekerja} 
                         onChange={(e) => setFormData({...formData, jumlah_pekerja: e.target.value})} 
-                        className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500" 
+                        disabled={submitting}
+                        className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100" 
                         placeholder="Total pekerja"
                       />
                     </div>
@@ -411,7 +477,8 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                     <textarea 
                       value={formData.catatan} 
                       onChange={(e) => setFormData({...formData, catatan: e.target.value})} 
-                      className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500" 
+                      disabled={submitting}
+                      className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100" 
                       rows={3}
                       placeholder="Kondisi lapangan, catatan tambahan, dll"
                     />
@@ -441,6 +508,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                   <div className="flex justify-end gap-2">
                     <button 
                       onClick={() => {
+                        if (submitting) return
                         setSelectedBlocks([])
                         setFormData({
                           tanggal: new Date().toISOString().split('T')[0],
@@ -448,16 +516,27 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                           catatan: ''
                         })
                       }}
-                      className="px-4 py-2 border rounded hover:bg-gray-50"
+                      disabled={submitting}
+                      className="px-4 py-2 border rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       🔄 Reset
                     </button>
                     <button 
                       onClick={handleSubmit}
-                      disabled={loading}
-                      className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={submitting}
+                      className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
-                      {loading ? '⏳ Menyimpan...' : '💾 Simpan Transaksi'}
+                      {submitting ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                          <span>Menyimpan...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>💾</span>
+                          <span>Simpan Transaksi</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 </>
