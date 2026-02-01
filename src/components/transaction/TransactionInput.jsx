@@ -79,14 +79,16 @@ export default function TransactionInput({ user }) {
         luas_total: ba.luas_total,
         luas_completed: ba.luas_completed || 0,
         luas_remaining: ba.luas_remaining,
-        luas_dikerjakan: ba.luas_remaining
+        luas_dikerjakan: ''
       }])
     }
   }
 
   const handleLuasChange = (blockActivityId, value) => {
+    // Simpan sebagai string mentah dari input.
+    // Boleh kosong, boleh "2.", boleh "0.5" — jangan parseFloat di sini.
     setSelectedBlocks(selectedBlocks.map(b =>
-      b.id === blockActivityId ? { ...b, luas_dikerjakan: parseFloat(value) || 0 } : b
+      b.id === blockActivityId ? { ...b, luas_dikerjakan: value } : b
     ))
   }
 
@@ -105,14 +107,25 @@ export default function TransactionInput({ user }) {
       return
     }
 
+    // Re-fetch fresh block_activities dari DB sebelum validasi
+    // supaya luas_remaining reflect trigger update dari transaksi sebelumnya
+    const { data: freshBlocks } = await supabase
+      .from('block_activities')
+      .select('*')
+      .eq('activity_plan_id', selectedPlan.id)
+
     // Validate luas dikerjakan
     for (const block of selectedBlocks) {
-      if (!block.luas_dikerjakan || block.luas_dikerjakan <= 0) {
+      const parsed = parseFloat(block.luas_dikerjakan)
+      if (isNaN(parsed) || parsed <= 0) {
         alert(`❌ Luas dikerjakan untuk ${block.code} harus > 0`)
         return
       }
-      if (block.luas_dikerjakan > block.luas_remaining) {
-        alert(`❌ Luas dikerjakan untuk ${block.code} (${block.luas_dikerjakan}) melebihi sisa (${block.luas_remaining})`)
+      // Cek sisa dari data fresh di DB
+      const freshBlock = freshBlocks?.find(fb => fb.id === block.id)
+      const currentRemaining = freshBlock ? parseFloat(freshBlock.luas_remaining) : parseFloat(block.luas_remaining)
+      if (parsed > currentRemaining) {
+        alert(`❌ Luas dikerjakan untuk ${block.code} (${parsed}) melebihi sisa yang tersedia (${currentRemaining.toFixed(2)} Ha)`)
         return
       }
     }
@@ -214,9 +227,9 @@ export default function TransactionInput({ user }) {
         catatan: ''
       })
       
-      // Refresh data
-      fetchBlockActivities()
-      fetchPlans()
+      // Refresh data — await supaya luas_remaining sudah update dari trigger
+      await fetchBlockActivities()
+      await fetchPlans()
 
     } catch (error) {
       alert('❌ Error: ' + error.message)
@@ -323,17 +336,22 @@ export default function TransactionInput({ user }) {
 
                               {selected && (
                                 <div className="mt-3">
-                                  <label className="block text-xs font-medium text-gray-700 mb-1">Luas Dikerjakan Hari Ini (Ha) *</label>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                                    Luas Dikerjakan Hari Ini (Ha) *
+                                  </label>
                                   <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    max={ba.luas_remaining}
+                                    type="text"
+                                    inputMode="decimal"
+                                    pattern="[0-9]*\.?[0-9]*"
                                     value={selected.luas_dikerjakan}
                                     onChange={(e) => handleLuasChange(ba.id, e.target.value)}
+                                    onFocus={(e) => e.target.select()}
                                     className="w-full px-3 py-2 border rounded"
-                                    placeholder={`Max: ${ba.luas_remaining} Ha`}
+                                    placeholder="Masukkan luas (Ha)"
                                   />
+                                  <div className="text-xs text-orange-600 mt-1">
+                                    Sisa yang tersedia: {ba.luas_remaining.toFixed(2)} Ha
+                                  </div>
                                 </div>
                               )}
                             </div>
