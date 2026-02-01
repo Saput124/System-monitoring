@@ -8,8 +8,8 @@ export default function WorkPlanRegistration({ user }) {
   
   // Master data
   const [sections, setSections] = useState([])
-  const [assignedActivities, setAssignedActivities] = useState([]) // HANYA dari section_activities!
-  const [assignedVendor, setAssignedVendor] = useState(null) // LOCKED dari assignment!
+  const [activities, setActivities] = useState([])
+  const [vendors, setVendors] = useState([])
   const [blocks, setBlocks] = useState([])
   const [stages, setStages] = useState([])
   const [plans, setPlans] = useState([])
@@ -22,14 +22,11 @@ export default function WorkPlanRegistration({ user }) {
     vendor_id: '',
     target_bulan: new Date().toISOString().slice(0, 7) + '-01',
     stage_id: '',
-    alternative_option: '',
     selectedBlocks: []
   })
   
   // Block summary
   const [blockSummary, setBlockSummary] = useState({ PC: { count: 0, luas: 0 }, RC: { count: 0, luas: 0 } })
-  const [availableStages, setAvailableStages] = useState([])
-  const [availableAlternatives, setAvailableAlternatives] = useState([])
   
   useEffect(() => {
     fetchMasterData()
@@ -38,20 +35,9 @@ export default function WorkPlanRegistration({ user }) {
   }, [activeTab])
   
   useEffect(() => {
-    if (formData.section_id) {
-      fetchAssignedActivities()
-    }
-  }, [formData.section_id])
-  
-  useEffect(() => {
     if (formData.activity_type_id) {
-      checkActivityRequirements()
-      fetchAvailableStages()
-      fetchAvailableAlternatives()
-    } else {
-      setAssignedVendor(null)
-      setStages([])
-      setAvailableAlternatives([])
+      fetchStages()
+      checkVendorRequirement()
     }
   }, [formData.activity_type_id, blockSummary])
   
@@ -60,131 +46,62 @@ export default function WorkPlanRegistration({ user }) {
   }, [formData.selectedBlocks])
   
   const fetchMasterData = async () => {
-    const [s, b] = await Promise.all([
-      supabase.from('sections').select('*').eq('active', true).order('name'),
+    const [s, a, v, b] = await Promise.all([
+      supabase.from('sections').select('*').eq('active', true),
+      supabase.from('activity_types').select('*').eq('active', true),
+      supabase.from('vendors').select('*').eq('active', true),
       supabase.from('blocks').select('*').eq('active', true).order('code')
     ])
     setSections(s.data || [])
+    setActivities(a.data || [])
+    setVendors(v.data || [])
     setBlocks(b.data || [])
   }
   
-  // CRITICAL: Hanya ambil activities yang sudah di-assign ke section!
-  const fetchAssignedActivities = async () => {
-    const { data } = await supabase
-      .from('section_activities')
-      .select('*, activity_types(*)')
-      .eq('section_id', formData.section_id)
-      .eq('active', true)
-    
-    setAssignedActivities(data || [])
-    
-    // Reset activity selection jika section berubah
-    setFormData(prev => ({ 
-      ...prev, 
-      activity_type_id: '', 
-      vendor_id: '',
-      stage_id: '',
-      alternative_option: ''
-    }))
-    setAssignedVendor(null)
-  }
-  
-  // CRITICAL: Cek apakah activity butuh vendor dan auto-assign dari vendor_assignments
-  const checkActivityRequirements = async () => {
-    const activity = assignedActivities.find(
-      sa => sa.activity_type_id === formData.activity_type_id
-    )?.activity_types
-    
-    if (!activity) return
-    
-    if (activity.requires_vendor) {
-      // WAJIB ambil dari vendor_assignments
-      const { data, error } = await supabase
-        .from('vendor_assignments')
-        .select('vendor_id, vendors(id, code, name)')
-        .eq('section_id', formData.section_id)
-        .eq('activity_type_id', formData.activity_type_id)
-        .eq('active', true)
-        .single()
-      
-      if (!data || error) {
-        alert(`❌ VALIDASI GAGAL!\n\nTidak ada vendor yang di-assign untuk activity "${activity.name}" di section ini.\n\nHubungi admin untuk assign vendor di menu Assignment Management.`)
-        setFormData(prev => ({ ...prev, activity_type_id: '', vendor_id: '' }))
-        setAssignedVendor(null)
-        return
-      }
-      
-      // LOCK vendor - user tidak bisa ganti!
-      setAssignedVendor(data.vendors)
-      setFormData(prev => ({ ...prev, vendor_id: data.vendor_id }))
-      
-      console.log('✅ Vendor auto-assigned:', data.vendors.name)
-    } else {
-      // Activity tidak butuh vendor
-      setAssignedVendor(null)
-      setFormData(prev => ({ ...prev, vendor_id: null }))
-    }
-  }
-  
-  // CRITICAL: Ambil stages yang sesuai dengan kategori blok yang dipilih
-  const fetchAvailableStages = async () => {
+  const fetchStages = async () => {
     const { PC, RC } = blockSummary
     const hasPC = PC.count > 0
     const hasRC = RC.count > 0
     
-    const activity = assignedActivities.find(
-      sa => sa.activity_type_id === formData.activity_type_id
-    )?.activity_types
-    
-    if (!activity || !activity.requires_material) {
-      setStages([])
-      return
-    }
-    
-    // Ambil distinct stages dari activity_materials
-    const { data } = await supabase
-      .from('activity_materials')
-      .select('stage_id, activity_stages(id, code, name)')
+    let query = supabase
+      .from('activity_stages')
+      .select('*')
       .eq('activity_type_id', formData.activity_type_id)
+      .order('sequence_order')
     
-    if (!data) {
-      setStages([])
-      return
+    // Filter by kategori if applicable
+    if (hasPC && !hasRC) {
+      query = query.or('for_kategori.is.null,for_kategori.eq.PC')
+    } else if (hasRC && !hasPC) {
+      query = query.or('for_kategori.is.null,for_kategori.eq.RC')
     }
+    // If both, show all stages
     
-    // Filter stages yang cocok dengan kategori blok
-    const uniqueStages = []
-    const seenIds = new Set()
+    const { data } = await query
+    setStages(data || [])
     
-    data.forEach(item => {
-      if (!item.stage_id || seenIds.has(item.stage_id)) return
-      
-      // Cek apakah stage ini valid untuk kategori yang dipilih
-      // Untuk saat ini kita ambil semua, nanti bisa ditambah filter
-      seenIds.add(item.stage_id)
-      uniqueStages.push(item.activity_stages)
+    console.log('📋 Stages loaded:', {
+      activity: activities.find(a => a.id === formData.activity_type_id)?.name,
+      hasPC, hasRC,
+      stages: data?.length || 0
     })
-    
-    setStages(uniqueStages)
-    
-    console.log('📋 Available stages:', uniqueStages.length, 'for activity', activity.name)
   }
   
-  // CRITICAL: Ambil alternative options yang tersedia
-  const fetchAvailableAlternatives = async () => {
-    const { data } = await supabase
-      .from('activity_materials')
-      .select('alternative_option')
-      .eq('activity_type_id', formData.activity_type_id)
-      .not('alternative_option', 'is', null)
-    
-    if (!data) {
-      setAvailableAlternatives([])
-      return
+  const checkVendorRequirement = async () => {
+    const activity = activities.find(a => a.id === formData.activity_type_id)
+    if (activity?.requires_vendor) {
+      // Auto-assign vendor from assignment
+      const { data } = await supabase
+        .from('vendor_assignments')
+        .select('vendor_id')
+        .eq('section_id', formData.section_id)
+        .eq('activity_type_id', formData.activity_type_id)
+        .single()
+      
+      if (data) {
+        setFormData(prev => ({ ...prev, vendor_id: data.vendor_id }))
+      }
     }
-    
-    const uniqueAlts = [...new Set(data.map(d => d.alternative_option))]
-    setAvailableAlternatives(uniqueAlts)
   }
   
   const calculateBlockSummary = () => {
@@ -214,9 +131,9 @@ export default function WorkPlanRegistration({ user }) {
       .from('activity_plans')
       .select(`
         *,
-        sections(name, code),
-        activity_types(name, code, requires_material, requires_vendor),
-        vendors(name, code),
+        sections(name),
+        activity_types(name, requires_material),
+        vendors(name),
         activity_stages(name)
       `)
       .order('created_at', { ascending: false })
@@ -252,14 +169,7 @@ export default function WorkPlanRegistration({ user }) {
   const validateForm = () => {
     const errors = []
     const { PC, RC } = blockSummary
-    
-    const activity = assignedActivities.find(
-      sa => sa.activity_type_id === formData.activity_type_id
-    )?.activity_types
-    
-    if (!formData.section_id) {
-      errors.push('Pilih section terlebih dahulu')
-    }
+    const activity = activities.find(a => a.id === formData.activity_type_id)
     
     if (!formData.activity_type_id) {
       errors.push('Pilih activity terlebih dahulu')
@@ -269,13 +179,19 @@ export default function WorkPlanRegistration({ user }) {
       errors.push('Pilih minimal 1 blok')
     }
     
-    // Validasi vendor untuk activity yang membutuhkan
-    if (activity?.requires_vendor && !formData.vendor_id) {
-      errors.push('Vendor diperlukan untuk activity ini')
+    // Check kategori conflict for specific stages
+    const selectedStage = stages.find(s => s.id === formData.stage_id)
+    if (selectedStage) {
+      if (selectedStage.for_kategori === 'PC' && RC.count > 0) {
+        errors.push(`⚠️ Stage "${selectedStage.name}" hanya untuk PC, tapi Anda pilih blok RC. Hapus blok RC atau buat rencana terpisah.`)
+      }
+      if (selectedStage.for_kategori === 'RC' && PC.count > 0) {
+        errors.push(`⚠️ Stage "${selectedStage.name}" hanya untuk RC, tapi Anda pilih blok PC. Hapus blok PC atau buat rencana terpisah.`)
+      }
     }
     
-    // Validasi stage untuk activity yang membutuhkan material
-    if (activity?.requires_material && stages.length > 0 && !formData.stage_id) {
+    // Check if stage required but not selected
+    if (stages.length > 0 && !formData.stage_id && activity?.requires_material) {
       errors.push('Pilih stage/metode untuk activity ini')
     }
     
@@ -289,268 +205,241 @@ export default function WorkPlanRegistration({ user }) {
       return
     }
     
-    const activity = assignedActivities.find(
-      sa => sa.activity_type_id === formData.activity_type_id
-    )?.activity_types
+    const activity = activities.find(a => a.id === formData.activity_type_id)
     
-    try {
-      // 1. Create activity plan
-      const planData = {
+    console.log('💾 Submitting plan:', formData)
+    
+    // Create activity plan
+    const { data: plan, error: planError } = await supabase
+      .from('activity_plans')
+      .insert({
         section_id: formData.section_id,
         activity_type_id: formData.activity_type_id,
         vendor_id: formData.vendor_id || null,
         target_bulan: formData.target_bulan,
         stage_id: formData.stage_id || null,
-        alternative_option: formData.alternative_option || null,
-        status: 'draft',
+        status: 'approved',
         created_by: user.id
-      }
-      
-      const { data: plan, error: planError } = await supabase
-        .from('activity_plans')
-        .insert(planData)
-        .select()
-        .single()
-      
-      if (planError) throw planError
-      
-      // 2. Create block activities
-      const blockActivities = formData.selectedBlocks.map(blockId => {
-        const block = blocks.find(b => b.id === blockId)
-        return {
-          activity_plan_id: plan.id,
-          block_id: blockId,
-          luas_total: block.luas_total,
-          status: 'planned'
-        }
       })
-      
-      const { error: blockError } = await supabase
-        .from('block_activities')
-        .insert(blockActivities)
-      
-      if (blockError) throw blockError
-      
-      // 3. Create planned materials (jika activity butuh material)
-      if (activity.requires_material) {
-        // Ambil material SOP yang sesuai
-        let materialQuery = supabase
-          .from('activity_materials')
-          .select('*')
-          .eq('activity_type_id', formData.activity_type_id)
-        
-        // Filter by stage
-        if (formData.stage_id) {
-          materialQuery = materialQuery.or(`stage_id.is.null,stage_id.eq.${formData.stage_id}`)
-        }
-        
-        // Filter by alternative
-        if (formData.alternative_option) {
-          materialQuery = materialQuery.or(`alternative_option.is.null,alternative_option.eq.${formData.alternative_option}`)
-        }
-        
-        const { data: materials } = await materialQuery
-        
-        if (materials && materials.length > 0) {
-          // Hitung total material berdasarkan luas
-          const totalLuasPC = blockSummary.PC.luas
-          const totalLuasRC = blockSummary.RC.luas
-          
-          const plannedMaterials = materials.map(m => {
-            let totalQty = 0
-            
-            // Hitung berdasarkan kategori
-            if (!m.tanaman_kategori || m.tanaman_kategori === 'PC') {
-              totalQty += totalLuasPC * parseFloat(m.default_dosis)
-            }
-            if (!m.tanaman_kategori || m.tanaman_kategori === 'RC') {
-              totalQty += totalLuasRC * parseFloat(m.default_dosis)
-            }
-            
-            return {
-              activity_plan_id: plan.id,
-              material_id: m.material_id,
-              total_quantity: totalQty.toFixed(3),
-              unit: m.unit
-            }
-          })
-          
-          const { error: matError } = await supabase
-            .from('planned_materials')
-            .insert(plannedMaterials)
-          
-          if (matError) throw matError
-        }
-      }
-      
-      alert(`✅ Rencana kerja berhasil dibuat!\n\n` +
-        `Activity: ${activity.name}\n` +
-        `Blok: ${formData.selectedBlocks.length} blok\n` +
-        `Total Luas: ${(blockSummary.PC.luas + blockSummary.RC.luas).toFixed(2)} Ha`)
-      
-      setShowModal(false)
-      setFormData({
-        section_id: user.section_id || '',
-        activity_type_id: '',
-        vendor_id: '',
-        target_bulan: new Date().toISOString().slice(0, 7) + '-01',
-        stage_id: '',
-        alternative_option: '',
-        selectedBlocks: []
-      })
-      fetchPlans()
-      
-    } catch (error) {
-      console.error('Error creating plan:', error)
-      alert('❌ Error: ' + error.message)
-    }
-  }
-  
-  const handleDeletePlan = async (planId) => {
-    if (!confirm('Yakin hapus rencana kerja ini? Semua data terkait akan terhapus.')) return
+      .select()
+      .single()
     
-    // Cek apakah sudah ada transaksi
-    const { data: transactions } = await supabase
-      .from('transactions')
-      .select('id, block_activities!inner(activity_plan_id)')
-      .eq('block_activities.activity_plan_id', planId)
-      .limit(1)
-    
-    if (transactions && transactions.length > 0) {
-      alert('❌ Tidak bisa hapus!\n\nSudah ada transaksi yang menggunakan planning ini.')
+    if (planError) {
+      alert('❌ Error creating plan: ' + planError.message)
+      console.error(planError)
       return
     }
     
-    const { error } = await supabase
-      .from('activity_plans')
-      .delete()
-      .eq('id', planId)
+    console.log('✅ Plan created:', plan.id)
     
-    if (!error) {
-      alert('✅ Rencana kerja berhasil dihapus')
-      fetchPlans()
+    // Insert block activities
+    const blockActivities = formData.selectedBlocks.map(blockId => {
+      const block = blocks.find(b => b.id === blockId)
+      return {
+        activity_plan_id: plan.id,
+        block_id: blockId,
+        luas_total: block.luas_total,
+        luas_remaining: block.luas_total,
+        status: 'planned'
+      }
+    })
+    
+    const { error: blockError } = await supabase
+      .from('block_activities')
+      .insert(blockActivities)
+    
+    if (blockError) {
+      alert('❌ Error creating block activities: ' + blockError.message)
+      console.error(blockError)
+      return
+    }
+    
+    console.log('✅ Block activities created:', blockActivities.length)
+    
+    // Calculate and insert planned materials
+    if (activity?.requires_material) {
+      await calculateAndInsertMaterials(plan.id)
+    }
+    
+    alert('✅ Rencana kerja berhasil dibuat!')
+    setShowModal(false)
+    fetchPlans()
+    handleNewPlan()
+  }
+  
+  const calculateAndInsertMaterials = async (planId) => {
+    // Query SOP materials
+    let materialQuery = supabase
+      .from('activity_materials')
+      .select('*, materials(code, name, unit)')
+      .eq('activity_type_id', formData.activity_type_id)
+    
+    // Filter by stage
+    if (formData.stage_id) {
+      materialQuery = materialQuery.eq('stage_id', formData.stage_id)
     } else {
-      alert('❌ Error: ' + error.message)
+      materialQuery = materialQuery.is('stage_id', null)
+    }
+    
+    const { data: sopMaterials, error: sopError } = await materialQuery
+    
+    console.log('🔍 SOP query:', {
+      activity: formData.activity_type_id,
+      stage: formData.stage_id,
+      results: sopMaterials?.length || 0,
+      error: sopError
+    })
+    
+    if (!sopMaterials || sopMaterials.length === 0) {
+      console.warn('⚠️ No SOP materials found')
+      return
+    }
+    
+    // Calculate totals
+    const materialGroups = {}
+    
+    formData.selectedBlocks.forEach(blockId => {
+      const block = blocks.find(b => b.id === blockId)
+      if (!block) return
+      
+      sopMaterials.forEach(sop => {
+        // Filter by kategori
+        if (sop.tanaman_kategori && sop.tanaman_kategori !== block.kategori) {
+          console.log(`⏩ Skip ${sop.materials?.name} for ${block.code}: kategori ${sop.tanaman_kategori} != ${block.kategori}`)
+          return
+        }
+        
+        const key = sop.material_id
+        if (!materialGroups[key]) {
+          materialGroups[key] = {
+            material_id: sop.material_id,
+            name: sop.materials?.name,
+            total_quantity: 0,
+            unit: sop.unit
+          }
+        }
+        
+        const quantity = parseFloat(sop.default_dosis) * parseFloat(block.luas_total)
+        materialGroups[key].total_quantity += quantity
+        
+        console.log(`✅ ${sop.materials?.name} for ${block.code}: ${sop.default_dosis} × ${block.luas_total} = ${quantity.toFixed(2)}`)
+      })
+    })
+    
+    const plannedMaterials = Object.values(materialGroups).map(m => ({
+      activity_plan_id: planId,
+      material_id: m.material_id,
+      total_quantity: parseFloat(m.total_quantity.toFixed(3)),
+      remaining_quantity: parseFloat(m.total_quantity.toFixed(3)),
+      unit: m.unit
+    }))
+    
+    console.log('💾 Inserting materials:', plannedMaterials)
+    
+    if (plannedMaterials.length > 0) {
+      const { error: matError } = await supabase
+        .from('planned_materials')
+        .insert(plannedMaterials)
+      
+      if (matError) {
+        console.error('❌ Material insert error:', matError)
+        alert('⚠️ Warning: Material calculation failed. ' + matError.message)
+      } else {
+        console.log(`✅ ${plannedMaterials.length} materials inserted`)
+      }
     }
   }
   
-  const selectedActivity = assignedActivities.find(
-    sa => sa.activity_type_id === formData.activity_type_id
-  )?.activity_types
+  const handleNewPlan = () => {
+    setFormData({
+      section_id: user.section_id || '',
+      activity_type_id: '',
+      vendor_id: '',
+      target_bulan: new Date().toISOString().slice(0, 7) + '-01',
+      stage_id: '',
+      selectedBlocks: []
+    })
+    setShowModal(true)
+  }
   
-  const showStageDropdown = selectedActivity?.requires_material && stages.length > 0
-  const hasNoStage = selectedActivity?.requires_material && stages.length === 0
-
+  const selectedActivity = activities.find(a => a.id === formData.activity_type_id)
+  const showStageDropdown = stages.length > 0
+  const hasNoStage = !showStageDropdown && selectedActivity?.requires_material
+  
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">Registrasi Rencana Kerja</h1>
-        <button 
-          onClick={() => setShowModal(true)} 
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-        >
-          + Buat Rencana Baru
-        </button>
-      </div>
-
+      <h1 className="text-2xl font-bold">Work Plan Registration</h1>
+      
       <div className="bg-white rounded-lg shadow">
         <div className="border-b">
           <div className="flex space-x-4">
             <button
               onClick={() => setActiveTab('rencana')}
-              className={`px-6 py-3 text-sm font-medium ${
-                activeTab === 'rencana' 
-                  ? 'border-b-2 border-blue-600 text-blue-600' 
-                  : 'text-gray-600 hover:text-blue-600'
-              }`}
+              className={`px-6 py-3 text-sm font-medium ${activeTab === 'rencana' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'}`}
             >
               📋 Rencana Kerja
             </button>
             <button
               onClick={() => setActiveTab('material')}
-              className={`px-6 py-3 text-sm font-medium ${
-                activeTab === 'material' 
-                  ? 'border-b-2 border-blue-600 text-blue-600' 
-                  : 'text-gray-600 hover:text-blue-600'
-              }`}
+              className={`px-6 py-3 text-sm font-medium ${activeTab === 'material' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'}`}
             >
-              🧪 Material Summary
+              🧪 Rencana Material
             </button>
           </div>
         </div>
-
+        
         <div className="p-6">
           {activeTab === 'rencana' ? (
-            <div className="space-y-4">
+            <>
               <div className="flex justify-between items-center mb-4">
-                <div className="text-sm text-gray-600">Total: {plans.length} rencana</div>
+                <button
+                  onClick={handleNewPlan}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  + Buat Rencana Baru
+                </button>
               </div>
               
-              {plans.length === 0 ? (
-                <div className="text-center py-12 text-gray-500">
-                  Belum ada rencana kerja
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {plans.map(plan => (
-                    <div key={plan.id} className="border rounded p-4 hover:bg-gray-50">
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="font-medium text-lg">{plan.activity_types.name}</span>
-                            <span className={`px-2 py-1 rounded text-xs font-medium ${
-                              plan.status === 'draft' ? 'bg-gray-100 text-gray-800' :
-                              plan.status === 'approved' ? 'bg-blue-100 text-blue-800' :
-                              plan.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
-                              plan.status === 'completed' ? 'bg-green-100 text-green-800' :
-                              'bg-red-100 text-red-800'
-                            }`}>
-                              {plan.status}
-                            </span>
-                          </div>
-                          
-                          <div className="grid grid-cols-2 gap-2 text-sm text-gray-600">
-                            <div>
-                              <span className="font-medium">Section:</span> {plan.sections.name}
-                            </div>
-                            <div>
-                              <span className="font-medium">Target:</span> {plan.target_bulan.slice(0, 7)}
-                            </div>
-                            {plan.vendors && (
-                              <div>
-                                <span className="font-medium">Vendor:</span> {plan.vendors.name}
-                              </div>
-                            )}
-                            {plan.activity_stages && (
-                              <div>
-                                <span className="font-medium">Stage:</span> {plan.activity_stages.name}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        
-                        <div className="flex gap-2">
-                          {plan.status === 'draft' && (
-                            <button 
-                              onClick={() => handleDeletePlan(plan.id)}
-                              className="text-red-600 hover:text-red-800 text-sm"
-                            >
-                              Delete
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Activity</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stage</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Section</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Bulan</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {plans.map(plan => (
+                      <tr key={plan.id}>
+                        <td className="px-4 py-3 text-sm font-medium">{plan.activity_types?.name}</td>
+                        <td className="px-4 py-3 text-sm">{plan.activity_stages?.name || '-'}</td>
+                        <td className="px-4 py-3 text-sm">{plan.sections?.name}</td>
+                        <td className="px-4 py-3 text-sm">{plan.vendors?.name || '-'}</td>
+                        <td className="px-4 py-3 text-sm">{new Date(plan.target_bulan).toLocaleDateString('id-ID', { year: 'numeric', month: 'long' })}</td>
+                        <td className="px-4 py-3 text-sm">
+                          <span className={`px-2 py-1 rounded text-xs ${
+                            plan.status === 'completed' ? 'bg-green-100 text-green-800' :
+                            plan.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-blue-100 text-blue-800'
+                          }`}>
+                            {plan.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           ) : (
-            <div>
+            <div className="space-y-4">
+              <h3 className="font-semibold">Material Summary by Activity</h3>
               {materialSummary.length === 0 ? (
-                <div className="text-center py-12 text-gray-500">
-                  Belum ada data material
-                </div>
+                <div className="text-center py-8 text-gray-500">Belum ada rencana material</div>
               ) : (
                 <div className="space-y-4">
                   {materialSummary.map(item => (
@@ -592,14 +481,12 @@ export default function WorkPlanRegistration({ user }) {
                   <label className="block text-sm font-medium mb-1">Section *</label>
                   <select
                     value={formData.section_id}
-                    onChange={(e) => setFormData({...formData, section_id: e.target.value, activity_type_id: '', vendor_id: ''})}
+                    onChange={(e) => setFormData({...formData, section_id: e.target.value})}
                     className="w-full px-3 py-2 border rounded"
                     disabled={user.role === 'section_head'}
                   >
                     <option value="">Pilih Section</option>
-                    {sections.map(s => (
-                      <option key={s.id} value={s.id}>{s.code} - {s.name}</option>
-                    ))}
+                    {sections.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                 </div>
                 
@@ -615,40 +502,28 @@ export default function WorkPlanRegistration({ user }) {
               </div>
               
               <div>
-                <label className="block text-sm font-medium mb-1">
-                  Activity * 
-                  <span className="text-xs text-gray-600 ml-2">
-                    (Hanya activity yang di-assign ke section ini)
-                  </span>
-                </label>
+                <label className="block text-sm font-medium mb-1">Activity *</label>
                 <select
                   value={formData.activity_type_id}
-                  onChange={(e) => setFormData({...formData, activity_type_id: e.target.value, stage_id: '', alternative_option: ''})}
+                  onChange={(e) => setFormData({...formData, activity_type_id: e.target.value, stage_id: ''})}
                   className="w-full px-3 py-2 border rounded"
-                  disabled={!formData.section_id}
                 >
                   <option value="">Pilih Activity</option>
-                  {assignedActivities.map(sa => (
-                    <option key={sa.id} value={sa.activity_type_id}>
-                      {sa.activity_types.code} - {sa.activity_types.name}
-                    </option>
-                  ))}
+                  {activities.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
-                {formData.section_id && assignedActivities.length === 0 && (
-                  <p className="text-xs text-orange-600 mt-1">
-                    ⚠️ Section ini belum punya activity assignment. Hubungi admin.
-                  </p>
-                )}
               </div>
               
-              {assignedVendor && (
+              {selectedActivity?.requires_vendor && (
                 <div>
-                  <label className="block text-sm font-medium mb-1">
-                    Vendor <span className="text-xs text-blue-600">(Auto-assigned dari Assignment)</span>
-                  </label>
-                  <div className="w-full px-3 py-2 border rounded bg-blue-50 text-blue-900 font-medium">
-                    🔒 {assignedVendor.code} - {assignedVendor.name}
-                  </div>
+                  <label className="block text-sm font-medium mb-1">Vendor</label>
+                  <select
+                    value={formData.vendor_id}
+                    onChange={(e) => setFormData({...formData, vendor_id: e.target.value})}
+                    className="w-full px-3 py-2 border rounded"
+                  >
+                    <option value="">Pilih Vendor</option>
+                    {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                  </select>
                 </div>
               )}
               
@@ -669,23 +544,10 @@ export default function WorkPlanRegistration({ user }) {
                   >
                     <option value="">Pilih Stage</option>
                     {stages.map(s => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              
-              {availableAlternatives.length > 0 && (
-                <div>
-                  <label className="block text-sm font-medium mb-1">Alternative Option</label>
-                  <select
-                    value={formData.alternative_option}
-                    onChange={(e) => setFormData({...formData, alternative_option: e.target.value})}
-                    className="w-full px-3 py-2 border rounded"
-                  >
-                    <option value="">Default</option>
-                    {availableAlternatives.map(alt => (
-                      <option key={alt} value={alt}>{alt}</option>
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                        {s.for_kategori && ` (${s.for_kategori} only)`}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -760,7 +622,6 @@ export default function WorkPlanRegistration({ user }) {
                 <MaterialPreview
                   activityTypeId={formData.activity_type_id}
                   stageId={formData.stage_id}
-                  alternativeOption={formData.alternative_option}
                   selectedBlocks={formData.selectedBlocks}
                   blocks={blocks}
                 />
