@@ -69,6 +69,10 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
     if (exists) {
       setSelectedBlocks(selectedBlocks.filter(b => b.id !== ba.id))
     } else {
+      const baCompleted = parseFloat(ba.luas_completed || 0)
+      const baTotal = parseFloat(ba.luas_total || 0)
+      const derivedRemaining = Math.max(0, baTotal - baCompleted)
+      
       setSelectedBlocks([...selectedBlocks, {
         id: ba.id,
         block_id: ba.block_id,
@@ -78,8 +82,8 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
         kategori: ba.blocks.kategori,
         varietas: ba.blocks.varietas,
         luas_total: ba.luas_total,
-        luas_completed: ba.luas_completed || 0,
-        luas_remaining: ba.luas_remaining,
+        luas_completed: baCompleted,
+        luas_remaining: derivedRemaining,
         luas_dikerjakan: ''
       }])
     }
@@ -284,6 +288,67 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
         }
       }
 
+      // 🔥 STEP 5: Update block_activities — luas_completed, luas_remaining, status
+      try {
+        for (const block of selectedBlocks) {
+          const luasDikerjakan = parseFloat(block.luas_dikerjakan)
+
+          // Fetch fresh block_activity data to avoid race conditions
+          const { data: freshBA } = await supabase
+            .from('block_activities')
+            .select('*')
+            .eq('id', block.id)
+            .single()
+
+          if (!freshBA) continue
+
+          const newCompleted = parseFloat(freshBA.luas_completed || 0) + luasDikerjakan
+          const newRemaining = parseFloat(freshBA.luas_total) - newCompleted
+          const clampedRemaining = Math.max(0, parseFloat(newRemaining.toFixed(4)))
+          const newStatus = clampedRemaining <= 0 ? 'completed' : 'in_progress'
+
+          const { error: updateError } = await supabase
+            .from('block_activities')
+            .update({
+              luas_completed: parseFloat(newCompleted.toFixed(4)),
+              luas_remaining: clampedRemaining,
+              status: newStatus,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', block.id)
+
+          if (updateError) {
+            console.error(`Failed to update block_activity ${block.id}:`, updateError)
+            throw updateError
+          }
+        }
+
+        // 🔥 STEP 6: Check if ALL block_activities for this plan are completed → update activity_plan status
+        const { data: allBA } = await supabase
+          .from('block_activities')
+          .select('status')
+          .eq('activity_plan_id', selectedPlan.id)
+
+        if (allBA && allBA.length > 0) {
+          const allCompleted = allBA.every(ba => ba.status === 'completed')
+          const anyInProgress = allBA.some(ba => ba.status === 'in_progress')
+
+          const newPlanStatus = allCompleted ? 'completed' : anyInProgress ? 'in_progress' : 'approved'
+
+          await supabase
+            .from('activity_plans')
+            .update({ status: newPlanStatus, updated_at: new Date().toISOString() })
+            .eq('id', selectedPlan.id)
+        }
+
+      } catch (updateError) {
+        // Rollback transaction
+        await supabase.from('transaction_materials').delete().eq('transaction_id', transaction.id)
+        await supabase.from('transaction_blocks').delete().eq('transaction_id', transaction.id)
+        await supabase.from('transactions').delete().eq('id', transaction.id)
+        throw new Error(`Gagal mengupdate status blok: ${updateError.message}`)
+      }
+
       // 🔥 SUCCESS!
       alert('✅ Transaksi berhasil disimpan!')
       
@@ -378,6 +443,9 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                   <div className="border rounded divide-y max-h-96 overflow-y-auto">
                     {blockActivities.map(ba => {
                       const selected = selectedBlocks.find(b => b.id === ba.id)
+                      const baCompleted = parseFloat(ba.luas_completed || 0)
+                      const baTotal = parseFloat(ba.luas_total || 0)
+                      const baSisa = Math.max(0, baTotal - baCompleted)
                       
                       return (
                         <div key={ba.id} className={`p-4 ${selected ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50'}`}>
@@ -406,13 +474,13 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                               
                               <div className="grid grid-cols-3 gap-2 text-sm mb-2">
                                 <div className="bg-white px-2 py-1 rounded border">
-                                  <span className="text-gray-600">Total:</span> <span className="font-medium">{ba.luas_total} Ha</span>
+                                  <span className="text-gray-600">Total:</span> <span className="font-medium">{baTotal.toFixed(2)} Ha</span>
                                 </div>
                                 <div className="bg-white px-2 py-1 rounded border">
-                                  <span className="text-gray-600">Selesai:</span> <span className="font-medium text-green-600">{(ba.luas_completed || 0).toFixed(2)} Ha</span>
+                                  <span className="text-gray-600">Selesai:</span> <span className="font-medium text-green-600">{baCompleted.toFixed(2)} Ha</span>
                                 </div>
                                 <div className="bg-white px-2 py-1 rounded border">
-                                  <span className="text-gray-600">Sisa:</span> <span className="font-medium text-orange-600">{ba.luas_remaining.toFixed(2)} Ha</span>
+                                  <span className="text-gray-600">Sisa:</span> <span className="font-medium text-orange-600">{baSisa.toFixed(2)} Ha</span>
                                 </div>
                               </div>
 
@@ -425,16 +493,16 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                                     type="number"
                                     step="0.01"
                                     min="0"
-                                    max={ba.luas_remaining}
+                                    max={baSisa}
                                     value={selected.luas_dikerjakan}
                                     onChange={(e) => handleLuasChange(ba.id, e.target.value)}
                                     onFocus={(e) => e.target.select()}
                                     disabled={submitting}
                                     className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
-                                    placeholder={`Maksimal ${ba.luas_remaining.toFixed(2)} Ha`}
+                                    placeholder={`Maksimal ${baSisa.toFixed(2)} Ha`}
                                   />
                                   <div className="text-xs text-orange-600 mt-1 font-medium">
-                                    ⚠️ Sisa yang tersedia: {ba.luas_remaining.toFixed(2)} Ha
+                                    ⚠️ Sisa yang tersedia: {baSisa.toFixed(2)} Ha
                                   </div>
                                 </div>
                               )}
