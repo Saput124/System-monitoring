@@ -31,12 +31,12 @@ export default function TransactionInput({ user }) {
       .select(`
         *,
         sections(name),
-        activity_types(name, requires_material, requires_vendor),
+        activities(name, requires_material, requires_vendor),
         vendors(name),
         activity_stages(name)
       `)
       .in('status', ['approved', 'in_progress'])
-      .order('target_bulan', { ascending: false })
+      .order('target_date', { ascending: false })
 
     if (user.role === 'vendor') {
       query = query.eq('vendor_id', user.vendor_id)
@@ -123,12 +123,17 @@ export default function TransactionInput({ user }) {
     try {
       // Get material configuration if needed
       let materials = []
-      if (selectedPlan.activity_types.requires_material) {
-        const { data: activityMaterials } = await supabase
+      if (selectedPlan.activities?.requires_material) {
+        let matQuery = supabase
           .from('activity_materials')
           .select('*, materials(code, name, unit)')
-          .eq('activity_type_id', selectedPlan.activity_type_id)
+          .eq('activity_id', selectedPlan.activity_id)
 
+        if (selectedPlan.stage_id) {
+          matQuery = matQuery.eq('stage_id', selectedPlan.stage_id)
+        }
+
+        const { data: activityMaterials } = await matQuery
         if (activityMaterials) {
           materials = activityMaterials
         }
@@ -227,8 +232,9 @@ export default function TransactionInput({ user }) {
               <option value="">-- Pilih Rencana --</option>
               {plans.map(plan => (
                 <option key={plan.id} value={plan.id}>
-                  {plan.activity_types.name} - {plan.sections.name} - {new Date(plan.target_bulan).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
-                  {plan.vendors && ` - ${plan.vendors.name}`}
+                  {plan.activities?.name} - {plan.sections?.name} - {new Date(plan.target_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  {plan.activity_stages ? ` [${plan.activity_stages.name}]` : ''}
+                  {plan.vendors ? ` - ${plan.vendors.name}` : ''}
                 </option>
               ))}
             </select>
@@ -237,13 +243,20 @@ export default function TransactionInput({ user }) {
           {selectedPlan && (
             <>
               <div className="bg-blue-50 border border-blue-200 rounded p-4">
-                <h3 className="font-semibold mb-2">Detail Rencana</h3>
+                <div className="flex justify-between items-start mb-3">
+                  <h3 className="font-semibold">Detail Rencana</h3>
+                  <span className={`px-2 py-1 rounded text-xs font-medium ${
+                    selectedPlan.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' : 'bg-blue-100 text-blue-800'
+                  }`}>
+                    {selectedPlan.status === 'in_progress' ? 'Sedang Dikerjakan' : 'Approved'}
+                  </span>
+                </div>
                 <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div><span className="text-gray-600">Activity:</span> <span className="font-medium">{selectedPlan.activity_types.name}</span></div>
-                  <div><span className="text-gray-600">Section:</span> <span className="font-medium">{selectedPlan.sections.name}</span></div>
-                  {selectedPlan.vendors && <div><span className="text-gray-600">Vendor:</span> <span className="font-medium">{selectedPlan.vendors.name}</span></div>}
+                  <div><span className="text-gray-600">Activity:</span> <span className="font-medium">{selectedPlan.activities?.name}</span></div>
+                  <div><span className="text-gray-600">Section:</span> <span className="font-medium">{selectedPlan.sections?.name}</span></div>
+                  <div><span className="text-gray-600">Target Tanggal:</span> <span className="font-medium">{new Date(selectedPlan.target_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span></div>
                   {selectedPlan.activity_stages && <div><span className="text-gray-600">Stage:</span> <span className="font-medium">{selectedPlan.activity_stages.name}</span></div>}
-                  {selectedPlan.alternative_option && <div><span className="text-gray-600">Alternative:</span> <span className="font-medium">{selectedPlan.alternative_option}</span></div>}
+                  {selectedPlan.vendors && <div><span className="text-gray-600">Vendor:</span> <span className="font-medium">{selectedPlan.vendors.name}</span></div>}
                 </div>
               </div>
 
@@ -377,7 +390,7 @@ export default function TransactionInput({ user }) {
                         <span className="text-gray-600">Total Luas Dikerjakan:</span>
                         <span className="font-medium">{getTotalLuasDikerjakan().toFixed(2)} Ha</span>
                       </div>
-                      {selectedPlan.activity_types.requires_material && (
+                      {selectedPlan.activities?.requires_material && (
                         <div className="text-xs text-gray-600 mt-2">
                           * Material akan otomatis terhitung sesuai SOP
                         </div>
