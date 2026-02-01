@@ -35,11 +35,13 @@ export default function WorkPlanRegistration({ user }) {
   }, [activeTab])
   
   useEffect(() => {
-    if (formData.activity_type_id) {
+    if (formData.activity_id) {
       fetchStages()
       checkVendorRequirement()
+    } else {
+      setStages([])
     }
-  }, [formData.activity_type_id, blockSummary])
+  }, [formData.activity_id, blockSummary])
   
   useEffect(() => {
     calculateBlockSummary()
@@ -63,21 +65,41 @@ export default function WorkPlanRegistration({ user }) {
     const hasPC = PC.count > 0
     const hasRC = RC.count > 0
     
+    // Fetch stages yang sudah di-assign di activity_materials (setup dari Assignment)
     let query = supabase
-      .from('activity_stages')
-      .select('*')
+      .from('activity_materials')
+      .select('stage_id, activity_stages(id, name, kategori, sequence_order)')
       .eq('activity_id', formData.activity_id)
-      .order('sequence_order')
-    
-    // Filter by kategori
-    if (hasPC && !hasRC) {
-      query = query.in('kategori', ['PC', 'ALL'])
-    } else if (hasRC && !hasPC) {
-      query = query.in('kategori', ['RC', 'ALL'])
-    }
+      .not('stage_id', 'is', null)
     
     const { data } = await query
-    setStages(data || [])
+    
+    if (!data || data.length === 0) {
+      setStages([])
+      return
+    }
+    
+    // Deduplicate berdasarkan stage_id
+    const stageMap = new Map()
+    data.forEach(row => {
+      if (row.activity_stages && !stageMap.has(row.activity_stages.id)) {
+        stageMap.set(row.activity_stages.id, row.activity_stages)
+      }
+    })
+    
+    let uniqueStages = Array.from(stageMap.values())
+    
+    // Filter by kategori berdasarkan blok yang dipilih
+    if (hasPC && !hasRC) {
+      uniqueStages = uniqueStages.filter(s => s.kategori === 'PC' || s.kategori === 'ALL')
+    } else if (hasRC && !hasPC) {
+      uniqueStages = uniqueStages.filter(s => s.kategori === 'RC' || s.kategori === 'ALL')
+    }
+    
+    // Sort berdasarkan sequence_order
+    uniqueStages.sort((a, b) => (a.sequence_order || 0) - (b.sequence_order || 0))
+    
+    setStages(uniqueStages)
   }
   
   const checkVendorRequirement = async () => {
@@ -444,7 +466,7 @@ export default function WorkPlanRegistration({ user }) {
               
               {formData.activity_id && stages.length === 0 && (
                 <div className="bg-yellow-50 border border-yellow-200 rounded p-3 text-sm">
-                  ⚠️ Belum ada stage untuk activity ini. Setup dulu di Assignment!
+                  ⚠️ Belum ada stage yang di-assign untuk activity ini. Setup dulu di halaman Assignment (Activity Material).
                 </div>
               )}
               
