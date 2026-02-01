@@ -72,7 +72,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
       const baCompleted = parseFloat(ba.luas_completed || 0)
       const baTotal = parseFloat(ba.luas_total || 0)
       const derivedRemaining = Math.max(0, baTotal - baCompleted)
-      
+
       setSelectedBlocks([...selectedBlocks, {
         id: ba.id,
         block_id: ba.block_id,
@@ -193,6 +193,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
         const blockInserts = selectedBlocks.map(block => ({
           transaction_id: transaction.id,
           block_id: block.block_id,
+          block_activity_id: block.id,
           luas_dikerjakan: parseFloat(block.luas_dikerjakan)
         }))
 
@@ -288,42 +289,56 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
         }
       }
 
-      // 🔥 STEP 5: Update block_activities — luas_completed, luas_remaining, status
+      // 🔥 STEP 5: Recalculate block_activities dari ground truth (transaction_blocks)
+      // PENTING: Tidak boleh additive (current + dikerjakan) karena bisa ada trigger
+      // Supabase yang sudah mengupdate. Hitung dari scratch berdasarkan semua 
+      // transaction_blocks yang ada untuk block_activity ini.
       try {
-        for (const block of selectedBlocks) {
-          const luasDikerjakan = parseFloat(block.luas_dikerjakan)
+        // Ambil semua unique block_activity IDs yang terlibat
+        const blockActivityIds = selectedBlocks.map(b => b.id)
 
-          // Fetch fresh block_activity data to avoid race conditions
+        for (const baId of blockActivityIds) {
+          // Fetch fresh block_activity untuk dapat luas_total
           const { data: freshBA } = await supabase
             .from('block_activities')
             .select('*')
-            .eq('id', block.id)
+            .eq('id', baId)
             .single()
 
           if (!freshBA) continue
 
-          const newCompleted = parseFloat(freshBA.luas_completed || 0) + luasDikerjakan
-          const newRemaining = parseFloat(freshBA.luas_total) - newCompleted
-          const clampedRemaining = Math.max(0, parseFloat(newRemaining.toFixed(4)))
-          const newStatus = clampedRemaining <= 0 ? 'completed' : 'in_progress'
+          // Hitung total luas_completed dari SEMUA transaction_blocks 
+          // yang terkait block_activity ini (ground truth)
+          const { data: allTxBlocks } = await supabase
+            .from('transaction_blocks')
+            .select('luas_dikerjakan')
+            .eq('block_activity_id', baId)
+
+          const trueLuasCompleted = (allTxBlocks || []).reduce(
+            (sum, tb) => sum + parseFloat(tb.luas_dikerjakan || 0), 0
+          )
+
+          const baTotal = parseFloat(freshBA.luas_total || 0)
+          const newRemaining = Math.max(0, parseFloat((baTotal - trueLuasCompleted).toFixed(4)))
+          const newStatus = newRemaining <= 0 ? 'completed' : trueLuasCompleted > 0 ? 'in_progress' : 'planned'
 
           const { error: updateError } = await supabase
             .from('block_activities')
             .update({
-              luas_completed: parseFloat(newCompleted.toFixed(4)),
-              luas_remaining: clampedRemaining,
+              luas_completed: parseFloat(trueLuasCompleted.toFixed(4)),
+              luas_remaining: newRemaining,
               status: newStatus,
               updated_at: new Date().toISOString()
             })
-            .eq('id', block.id)
+            .eq('id', baId)
 
           if (updateError) {
-            console.error(`Failed to update block_activity ${block.id}:`, updateError)
+            console.error(`Failed to update block_activity ${baId}:`, updateError)
             throw updateError
           }
         }
 
-        // 🔥 STEP 6: Check if ALL block_activities for this plan are completed → update activity_plan status
+        // 🔥 STEP 6: Sync status activity_plan berdasarkan semua block_activities
         const { data: allBA } = await supabase
           .from('block_activities')
           .select('status')
@@ -332,7 +347,6 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
         if (allBA && allBA.length > 0) {
           const allCompleted = allBA.every(ba => ba.status === 'completed')
           const anyInProgress = allBA.some(ba => ba.status === 'in_progress')
-
           const newPlanStatus = allCompleted ? 'completed' : anyInProgress ? 'in_progress' : 'approved'
 
           await supabase
@@ -342,7 +356,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
         }
 
       } catch (updateError) {
-        // Rollback transaction
+        // Rollback: hapus transaction_materials, transaction_blocks, transaction
         await supabase.from('transaction_materials').delete().eq('transaction_id', transaction.id)
         await supabase.from('transaction_blocks').delete().eq('transaction_id', transaction.id)
         await supabase.from('transactions').delete().eq('id', transaction.id)
@@ -446,7 +460,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                       const baCompleted = parseFloat(ba.luas_completed || 0)
                       const baTotal = parseFloat(ba.luas_total || 0)
                       const baSisa = Math.max(0, baTotal - baCompleted)
-                      
+
                       return (
                         <div key={ba.id} className={`p-4 ${selected ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50'}`}>
                           <label className="flex items-start gap-3 cursor-pointer">
