@@ -275,18 +275,6 @@ export default function WorkPlanRegistration({ user }) {
   const handleNewPlan = () => {
     setFormData({
       section_id: user.section_id || '',
-      activity_type_id: '',
-      vendor_id: '',
-      target_bulan: new Date().toISOString().slice(0, 7) + '-01',
-      stage_id: '',
-      selectedBlocks: []
-    })
-    setShowModal(true)
-  }
-  
-  const handleNewPlan = () => {
-    setFormData({
-      section_id: user.section_id || '',
       activity_id: '',
       vendor_id: '',
       target_date: new Date().toISOString().slice(0, 10),
