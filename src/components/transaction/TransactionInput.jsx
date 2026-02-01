@@ -193,7 +193,6 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
         const blockInserts = selectedBlocks.map(block => ({
           transaction_id: transaction.id,
           block_id: block.block_id,
-          block_activity_id: block.id,
           luas_dikerjakan: parseFloat(block.luas_dikerjakan)
         }))
 
@@ -312,7 +311,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
           const { data: allTxBlocks } = await supabase
             .from('transaction_blocks')
             .select('luas_dikerjakan')
-            .eq('block_activity_id', baId)
+            .eq('block_id', freshBA.block_id)
 
           const trueLuasCompleted = (allTxBlocks || []).reduce(
             (sum, tb) => sum + parseFloat(tb.luas_dikerjakan || 0), 0
