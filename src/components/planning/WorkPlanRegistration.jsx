@@ -25,6 +25,9 @@ export default function WorkPlanRegistration({ user }) {
     selectedBlocks: []
   })
   
+  const [expandedPlanId, setExpandedPlanId] = useState(null)
+  const [expandedBlockActivities, setExpandedBlockActivities] = useState([])
+  
   // Block summary
   const [blockSummary, setBlockSummary] = useState({ PC: { count: 0, luas: 0 }, RC: { count: 0, luas: 0 } })
   
@@ -66,13 +69,11 @@ export default function WorkPlanRegistration({ user }) {
     const hasRC = RC.count > 0
     
     // Fetch stages yang sudah di-assign di activity_materials (setup dari Assignment)
-    let query = supabase
+    const { data } = await supabase
       .from('activity_materials')
       .select('stage_id, activity_stages(id, name, kategori, sequence_order)')
       .eq('activity_id', formData.activity_id)
       .not('stage_id', 'is', null)
-    
-    const { data } = await query
     
     if (!data || data.length === 0) {
       setStages([])
@@ -96,9 +97,7 @@ export default function WorkPlanRegistration({ user }) {
       uniqueStages = uniqueStages.filter(s => s.kategori === 'RC' || s.kategori === 'ALL')
     }
     
-    // Sort berdasarkan sequence_order
     uniqueStages.sort((a, b) => (a.sequence_order || 0) - (b.sequence_order || 0))
-    
     setStages(uniqueStages)
   }
   
@@ -169,6 +168,25 @@ export default function WorkPlanRegistration({ user }) {
     
     const { data } = await query
     setMaterialSummary(data || [])
+  }
+  
+  const fetchExpandedBlockActivities = async (planId) => {
+    const { data } = await supabase
+      .from('block_activities')
+      .select('*, blocks(code, name, kawasan, luas_total, kategori)')
+      .eq('activity_plan_id', planId)
+      .order('created_at')
+    setExpandedBlockActivities(data || [])
+  }
+  
+  const handleToggleExpand = async (planId) => {
+    if (expandedPlanId === planId) {
+      setExpandedPlanId(null)
+      setExpandedBlockActivities([])
+    } else {
+      setExpandedPlanId(planId)
+      await fetchExpandedBlockActivities(planId)
+    }
   }
   
   const handleBlockToggle = (blockId) => {
@@ -345,40 +363,119 @@ export default function WorkPlanRegistration({ user }) {
                 </button>
               </div>
               
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Activity</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stage</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Section</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vendor</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Bulan</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {plans.map(plan => (
-                      <tr key={plan.id}>
-                        <td className="px-4 py-3 text-sm font-medium">{plan.activities?.name}</td>
-                        <td className="px-4 py-3 text-sm">{plan.activity_stages?.name || '-'}</td>
-                        <td className="px-4 py-3 text-sm">{plan.sections?.name}</td>
-                        <td className="px-4 py-3 text-sm">{plan.vendors?.name || '-'}</td>
-                        <td className="px-4 py-3 text-sm">{new Date(plan.target_date).toLocaleDateString('id-ID')}</td>
-                        <td className="px-4 py-3 text-sm">
-                          <span className={`px-2 py-1 rounded text-xs ${
-                            plan.status === 'completed' ? 'bg-green-100 text-green-800' :
-                            plan.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
-                            'bg-blue-100 text-blue-800'
-                          }`}>
-                            {plan.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {plans.length === 0 ? (
+                <div className="text-center py-10 text-gray-500">Belum ada rencana kerja</div>
+              ) : (
+                <div className="space-y-2">
+                  {plans.map(plan => {
+                    const isExpanded = expandedPlanId === plan.id
+                    
+                    // Progress calculations for expanded view
+                    const totalLuas = expandedBlockActivities.reduce((s, ba) => s + parseFloat(ba.luas_total || 0), 0)
+                    const totalSelesai = expandedBlockActivities.reduce((s, ba) => s + parseFloat(ba.luas_completed || 0), 0)
+                    const totalSisa = totalLuas - totalSelesai
+                    const progressPct = totalLuas > 0 ? (totalSelesai / totalLuas) * 100 : 0
+                    const blokSelesai = expandedBlockActivities.filter(ba => ba.status === 'completed').length
+                    
+                    return (
+                      <div key={plan.id} className="border rounded-lg overflow-hidden">
+                        {/* Row utama — clickable */}
+                        <div
+                          onClick={() => handleToggleExpand(plan.id)}
+                          className="flex items-center gap-4 p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+                        >
+                          <div className="text-gray-400 text-sm w-4">{isExpanded ? '▼' : '▶'}</div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-sm">{plan.activities?.name}</span>
+                              {plan.activity_stages?.name && (
+                                <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">{plan.activity_stages.name}</span>
+                              )}
+                              <span className={`text-xs px-2 py-0.5 rounded font-medium ${
+                                plan.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                plan.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
+                                'bg-blue-100 text-blue-800'
+                              }`}>
+                                {plan.status === 'completed' ? 'Selesai' : plan.status === 'in_progress' ? 'Sedang Dikerjakan' : 'Approved'}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {plan.sections?.name}
+                              {plan.vendors?.name && ` · ${plan.vendors.name}`}
+                              {` · Target: ${new Date(plan.target_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Expanded detail */}
+                        {isExpanded && (
+                          <div className="border-t bg-gray-50 p-4 space-y-4">
+                            {/* Overall progress */}
+                            <div className="bg-white rounded-lg border p-4">
+                              <div className="flex justify-between text-sm mb-2">
+                                <span className="font-medium text-gray-700">Progress Keseluruhan</span>
+                                <span className="text-gray-500">{blokSelesai} dari {expandedBlockActivities.length} blok selesai</span>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-2.5 mb-3">
+                                <div className="bg-green-500 h-2.5 rounded-full transition-all" style={{ width: `${progressPct}%` }} />
+                              </div>
+                              <div className="grid grid-cols-3 gap-3 text-center">
+                                <div className="bg-gray-50 rounded p-2">
+                                  <div className="text-xs text-gray-500">Total Luas</div>
+                                  <div className="text-sm font-semibold text-gray-800">{totalLuas.toFixed(2)} Ha</div>
+                                </div>
+                                <div className="bg-green-50 rounded p-2">
+                                  <div className="text-xs text-green-600">Selesai</div>
+                                  <div className="text-sm font-semibold text-green-700">{totalSelesai.toFixed(2)} Ha</div>
+                                </div>
+                                <div className="bg-orange-50 rounded p-2">
+                                  <div className="text-xs text-orange-600">Sisa</div>
+                                  <div className="text-sm font-semibold text-orange-700">{totalSisa.toFixed(2)} Ha</div>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* List blok */}
+                            <div>
+                              <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Blok Kerja</div>
+                              <div className="space-y-2">
+                                {expandedBlockActivities.map(ba => {
+                                  const blokProgress = ba.luas_total > 0 ? ((ba.luas_completed || 0) / ba.luas_total) * 100 : 0
+                                  return (
+                                    <div key={ba.id} className="bg-white border rounded p-3">
+                                      <div className="flex justify-between items-start mb-2">
+                                        <div>
+                                          <div className="text-sm font-medium">{ba.blocks?.code} — {ba.blocks?.name}</div>
+                                          <div className="text-xs text-gray-500">{ba.blocks?.kawasan} · {ba.blocks?.kategori}</div>
+                                        </div>
+                                        <span className={`text-xs px-2 py-0.5 rounded font-medium ${
+                                          ba.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                          ba.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
+                                          'bg-gray-100 text-gray-600'
+                                        }`}>
+                                          {ba.status === 'completed' ? 'Selesai' : ba.status === 'in_progress' ? 'Dikerjakan' : 'Planned'}
+                                        </span>
+                                      </div>
+                                      <div className="w-full bg-gray-200 rounded-full h-1.5 mb-2">
+                                        <div className="bg-green-500 h-1.5 rounded-full" style={{ width: `${blokProgress}%` }} />
+                                      </div>
+                                      <div className="flex gap-4 text-xs text-gray-600">
+                                        <span>Total: <span className="font-medium text-gray-800">{parseFloat(ba.luas_total).toFixed(2)} Ha</span></span>
+                                        <span>Selesai: <span className="font-medium text-green-700">{parseFloat(ba.luas_completed || 0).toFixed(2)} Ha</span></span>
+                                        <span>Sisa: <span className="font-medium text-orange-700">{parseFloat(ba.luas_remaining || ba.luas_total).toFixed(2)} Ha</span></span>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </>
           ) : (
             <div className="space-y-4">
@@ -466,7 +563,7 @@ export default function WorkPlanRegistration({ user }) {
               
               {formData.activity_id && stages.length === 0 && (
                 <div className="bg-yellow-50 border border-yellow-200 rounded p-3 text-sm">
-                  ⚠️ Belum ada stage yang di-assign untuk activity ini. Setup dulu di halaman Assignment (Activity Material).
+                  ⚠️ Belum ada stage untuk activity ini. Setup dulu di Assignment!
                 </div>
               )}
               
