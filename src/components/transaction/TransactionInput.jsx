@@ -209,7 +209,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
         try {
           let matQuery = supabase
             .from('activity_materials')
-            .select('*, materials(code, name, unit)')
+            .select('*, materials(code, name, unit), activity_stages(kategori)')
             .eq('activity_id', selectedPlan.activity_id)
 
           if (selectedPlan.stage_id) {
@@ -227,7 +227,7 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
 
               sopMaterials.forEach(sop => {
                 const materialId = sop.material_id
-                const dosis = parseFloat(sop.dosis_per_ha)
+                const dosis = parseFloat(sop.default_dosis)
 
                 // 🔥 CRITICAL: Validate dosis tidak null/0
                 if (!dosis || isNaN(dosis)) {
@@ -235,8 +235,10 @@ export default function TransactionInput({ user, onTransactionSuccess }) {
                   return
                 }
 
-                // Filter by kategori if specified
-                if (sop.kategori_blok && sop.kategori_blok !== 'ALL' && sop.kategori_blok !== blockData.blocks.kategori) {
+                // Filter by stage kategori - skip if block doesn't match stage kategori
+                const stageKategori = sop.activity_stages?.kategori
+                if (stageKategori && stageKategori !== 'ALL' && stageKategori !== blockData.blocks.kategori) {
+                  console.log(`Skip material ${sop.materials?.code} for block ${blockData.blocks.code}: stage kategori ${stageKategori} != block kategori ${blockData.blocks.kategori}`)
                   return
                 }
 
