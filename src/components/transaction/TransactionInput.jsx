@@ -9,7 +9,6 @@ export default function TransactionInput({ user }) {
   const [formData, setFormData] = useState({
     tanggal: new Date().toISOString().split('T')[0],
     jumlah_pekerja: '',
-    kondisi: '',
     catatan: ''
   })
   const [loading, setLoading] = useState(false)
@@ -121,8 +120,37 @@ export default function TransactionInput({ user }) {
     setLoading(true)
 
     try {
-      // Get material configuration if needed
-      let materials = []
+      // 1. Insert 1 transaction untuk plan ini
+      const { data: transaction, error: txError } = await supabase
+        .from('transactions')
+        .insert({
+          activity_plan_id: selectedPlan.id,
+          transaction_date: formData.tanggal,
+          jumlah_pekerja: formData.jumlah_pekerja ? parseInt(formData.jumlah_pekerja) : null,
+          catatan: formData.catatan || null,
+          created_by: user.id
+        })
+        .select()
+        .single()
+
+      if (txError) throw txError
+
+      // 2. Insert transaction_blocks per blok yang dipilih
+      // -> trigger update_block_progress otomatis update block_activities
+      const blockInserts = selectedBlocks.map(block => ({
+        transaction_id: transaction.id,
+        block_id: block.block_id,
+        luas_dikerjakan: parseFloat(block.luas_dikerjakan)
+      }))
+
+      const { error: blockError } = await supabase
+        .from('transaction_blocks')
+        .insert(blockInserts)
+
+      if (blockError) throw blockError
+
+      // 3. Insert transaction_materials kalau activity requires material
+      // -> trigger update_material_allocation otomatis update planned_materials
       if (selectedPlan.activities?.requires_material) {
         let matQuery = supabase
           .from('activity_materials')
@@ -133,61 +161,46 @@ export default function TransactionInput({ user }) {
           matQuery = matQuery.eq('stage_id', selectedPlan.stage_id)
         }
 
-        const { data: activityMaterials } = await matQuery
-        if (activityMaterials) {
-          materials = activityMaterials
-        }
-      }
+        const { data: sopMaterials } = await matQuery
 
-      // Insert transactions for each selected block
-      for (const block of selectedBlocks) {
-        // Insert transaction
-        const { data: transaction, error: txError } = await supabase
-          .from('transactions')
-          .insert({
-            block_activity_id: block.id,
-            tanggal: formData.tanggal,
-            luas_dikerjakan: block.luas_dikerjakan,
-            jumlah_pekerja: formData.jumlah_pekerja ? parseInt(formData.jumlah_pekerja) : null,
-            kondisi: formData.kondisi || null,
-            catatan: formData.catatan || null,
-            created_by: user.id
-          })
-          .select()
-          .single()
+        if (sopMaterials && sopMaterials.length > 0) {
+          // Aggregate material per blok (dosis * luas), group by material_id
+          const materialTotals = {}
 
-        if (txError) throw txError
+          selectedBlocks.forEach(block => {
+            const blockData = blockActivities.find(ba => ba.id === block.id)
+            const blockKategori = blockData?.blocks?.kategori
 
-        // Insert materials if required
-        if (materials.length > 0) {
-          const blockData = blockActivities.find(ba => ba.id === block.id)
-          
-          const materialInserts = materials
-            .filter(m => {
-              if (m.tanaman_kategori && m.tanaman_kategori !== blockData.blocks.kategori) return false
-              if (m.alternative_option && m.alternative_option !== selectedPlan.alternative_option) return false
-              if (m.stage_id && m.stage_id !== selectedPlan.stage_id) return false
-              return true
+            sopMaterials.forEach(sop => {
+              // Filter material berdasarkan kategori blok
+              if (sop.kategori && sop.kategori !== 'ALL' && sop.kategori !== blockKategori) return
+
+              const key = sop.material_id
+              if (!materialTotals[key]) {
+                materialTotals[key] = {
+                  material_id: sop.material_id,
+                  quantity_used: 0,
+                  unit: sop.unit || sop.materials?.unit
+                }
+              }
+              materialTotals[key].quantity_used += parseFloat(sop.default_dosis) * parseFloat(block.luas_dikerjakan)
             })
-            .map(m => ({
-              transaction_id: transaction.id,
-              material_id: m.material_id,
-              quantity_used: (parseFloat(m.default_dosis) * parseFloat(block.luas_dikerjakan)).toFixed(3),
-              unit: m.unit
-            }))
+          })
+
+          const materialInserts = Object.values(materialTotals).map(m => ({
+            transaction_id: transaction.id,
+            material_id: m.material_id,
+            quantity_used: parseFloat(m.quantity_used.toFixed(3)),
+            unit: m.unit
+          }))
 
           if (materialInserts.length > 0) {
-            await supabase.from('transaction_materials').insert(materialInserts)
-          }
-        }
+            const { error: matError } = await supabase
+              .from('transaction_materials')
+              .insert(materialInserts)
 
-        // Insert workers (manual count)
-        if (formData.jumlah_pekerja) {
-          await supabase.from('transaction_workers').insert({
-            transaction_id: transaction.id,
-            worker_id: null,
-            jumlah_manual: parseInt(formData.jumlah_pekerja)
-          })
+            if (matError) throw matError
+          }
         }
       }
 
@@ -198,7 +211,6 @@ export default function TransactionInput({ user }) {
       setFormData({
         tanggal: new Date().toISOString().split('T')[0],
         jumlah_pekerja: '',
-        kondisi: '',
         catatan: ''
       })
       
@@ -358,24 +370,13 @@ export default function TransactionInput({ user }) {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium mb-1">Kondisi Lapangan</label>
-                    <textarea 
-                      value={formData.kondisi} 
-                      onChange={(e) => setFormData({...formData, kondisi: e.target.value})} 
-                      className="w-full px-3 py-2 border rounded" 
-                      rows={2}
-                      placeholder="Kondisi cuaca, tanah, dll"
-                    />
-                  </div>
-
-                  <div>
                     <label className="block text-sm font-medium mb-1">Catatan</label>
                     <textarea 
                       value={formData.catatan} 
                       onChange={(e) => setFormData({...formData, catatan: e.target.value})} 
                       className="w-full px-3 py-2 border rounded" 
-                      rows={2}
-                      placeholder="Catatan tambahan"
+                      rows={3}
+                      placeholder="Kondisi lapangan, catatan tambahan, dll"
                     />
                   </div>
 
@@ -405,7 +406,6 @@ export default function TransactionInput({ user }) {
                         setFormData({
                           tanggal: new Date().toISOString().split('T')[0],
                           jumlah_pekerja: '',
-                          kondisi: '',
                           catatan: ''
                         })
                       }}
