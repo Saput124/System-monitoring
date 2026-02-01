@@ -5,6 +5,8 @@ import MaterialPreview from './MaterialPreview'
 export default function WorkPlanRegistration({ user }) {
   const [activeTab, setActiveTab] = useState('rencana')
   const [showModal, setShowModal] = useState(false)
+  const [editMode, setEditMode] = useState(false)
+  const [editingPlanId, setEditingPlanId] = useState(null)
   
   // Master data
   const [sections, setSections] = useState([])
@@ -14,6 +16,10 @@ export default function WorkPlanRegistration({ user }) {
   const [stages, setStages] = useState([])
   const [plans, setPlans] = useState([])
   const [materialSummary, setMaterialSummary] = useState([])
+  
+  // 🔥 NEW: Kawasan filter
+  const [selectedKawasan, setSelectedKawasan] = useState('')
+  const [availableKawasan, setAvailableKawasan] = useState([])
   
   // Form state
   const [formData, setFormData] = useState({
@@ -50,11 +56,19 @@ export default function WorkPlanRegistration({ user }) {
     calculateBlockSummary()
   }, [formData.selectedBlocks])
   
+  // 🔥 NEW: Extract unique kawasan from blocks
+  useEffect(() => {
+    if (blocks.length > 0) {
+      const uniqueKawasan = [...new Set(blocks.map(b => b.kawasan))].filter(Boolean).sort()
+      setAvailableKawasan(uniqueKawasan)
+    }
+  }, [blocks])
+  
   const fetchMasterData = async () => {
     const [s, a, v, b] = await Promise.all([
-      supabase.from('sections').select('*').eq('active', true),
-      supabase.from('activities').select('*, sections(name)').eq('active', true),
-      supabase.from('vendors').select('*').eq('active', true),
+      supabase.from('sections').select('*').eq('active', true).order('name'),
+      supabase.from('activities').select('*, sections(name)').eq('active', true).order('name'),
+      supabase.from('vendors').select('*').eq('active', true).order('name'),
       supabase.from('blocks').select('*').eq('active', true).order('code')
     ])
     setSections(s.data || [])
@@ -68,7 +82,6 @@ export default function WorkPlanRegistration({ user }) {
     const hasPC = PC.count > 0
     const hasRC = RC.count > 0
     
-    // Fetch stages yang sudah di-assign di activity_materials (setup dari Assignment)
     const { data } = await supabase
       .from('activity_materials')
       .select('stage_id, activity_stages(id, name, kategori, sequence_order)')
@@ -80,7 +93,6 @@ export default function WorkPlanRegistration({ user }) {
       return
     }
     
-    // Deduplicate berdasarkan stage_id
     const stageMap = new Map()
     data.forEach(row => {
       if (row.activity_stages && !stageMap.has(row.activity_stages.id)) {
@@ -90,7 +102,6 @@ export default function WorkPlanRegistration({ user }) {
     
     let uniqueStages = Array.from(stageMap.values())
     
-    // Filter by kategori berdasarkan blok yang dipilih
     if (hasPC && !hasRC) {
       uniqueStages = uniqueStages.filter(s => s.kategori === 'PC' || s.kategori === 'ALL')
     } else if (hasRC && !hasPC) {
@@ -209,12 +220,78 @@ export default function WorkPlanRegistration({ user }) {
       errors.push('Pilih minimal 1 blok')
     }
     
-    // If stages available but none selected
     if (stages.length > 0 && !formData.stage_id) {
       errors.push('Pilih salah satu stage yang tersedia')
     }
     
     return errors
+  }
+  
+  // 🔥 NEW: Load plan data for editing
+  const handleEditPlan = async (plan) => {
+    setEditMode(true)
+    setEditingPlanId(plan.id)
+    
+    // Fetch block activities untuk plan ini
+    const { data: blockActivities } = await supabase
+      .from('block_activities')
+      .select('block_id')
+      .eq('activity_plan_id', plan.id)
+    
+    const selectedBlockIds = blockActivities?.map(ba => ba.block_id) || []
+    
+    setFormData({
+      section_id: plan.section_id,
+      activity_id: plan.activity_id,
+      vendor_id: plan.vendor_id || '',
+      target_date: plan.target_date,
+      stage_id: plan.stage_id || '',
+      selectedBlocks: selectedBlockIds
+    })
+    
+    setShowModal(true)
+  }
+  
+  // 🔥 NEW: Delete plan with validation
+  const handleDeletePlan = async (plan) => {
+    // Check if ada transaksi
+    const { data: transactions } = await supabase
+      .from('transactions')
+      .select('id')
+      .eq('activity_plan_id', plan.id)
+      .limit(1)
+    
+    if (transactions && transactions.length > 0) {
+      alert('❌ Tidak dapat menghapus rencana yang sudah memiliki transaksi!\n\nSilakan hubungi admin untuk bantuan.')
+      return
+    }
+    
+    const confirmed = confirm(
+      `⚠️ KONFIRMASI HAPUS\n\n` +
+      `Apakah Anda yakin ingin menghapus rencana ini?\n\n` +
+      `Activity: ${plan.activities?.name}\n` +
+      `Section: ${plan.sections?.name}\n` +
+      `Target: ${new Date(plan.target_date).toLocaleDateString('id-ID')}\n\n` +
+      `Data block activities dan planned materials juga akan terhapus.`
+    )
+    
+    if (!confirmed) return
+    
+    try {
+      // Delete cascade: planned_materials, block_activities, activity_plans
+      await supabase.from('planned_materials').delete().eq('activity_plan_id', plan.id)
+      await supabase.from('block_activities').delete().eq('activity_plan_id', plan.id)
+      const { error } = await supabase.from('activity_plans').delete().eq('id', plan.id)
+      
+      if (error) throw error
+      
+      alert('✅ Rencana berhasil dihapus!')
+      await fetchPlans()
+      
+    } catch (error) {
+      console.error('Error deleting plan:', error)
+      alert(`❌ Gagal menghapus rencana: ${error.message}`)
+    }
   }
   
   const handleSubmit = async () => {
@@ -224,49 +301,111 @@ export default function WorkPlanRegistration({ user }) {
       return
     }
     
-    // Create activity plan
-    const { data: plan, error: planError } = await supabase
-      .from('activity_plans')
-      .insert({
-        section_id: formData.section_id,
-        activity_id: formData.activity_id,
-        vendor_id: formData.vendor_id || null,
-        target_date: formData.target_date,
-        stage_id: formData.stage_id || null,
-        status: 'approved',
-        created_by: user.id
-      })
-      .select()
-      .single()
-    
-    if (planError) {
-      alert('❌ Error: ' + planError.message)
-      return
-    }
-    
-    // Insert block activities
-    const blockActivities = formData.selectedBlocks.map(blockId => {
-      const block = blocks.find(b => b.id === blockId)
-      return {
-        activity_plan_id: plan.id,
-        block_id: blockId,
-        luas_total: block.luas_total,
-        luas_remaining: block.luas_total,
-        status: 'planned'
+    try {
+      if (editMode) {
+        // 🔥 UPDATE MODE
+        // Check if ada transaksi
+        const { data: transactions } = await supabase
+          .from('transactions')
+          .select('id')
+          .eq('activity_plan_id', editingPlanId)
+          .limit(1)
+        
+        if (transactions && transactions.length > 0) {
+          alert('❌ Tidak dapat mengubah rencana yang sudah memiliki transaksi!')
+          return
+        }
+        
+        // Update activity plan
+        const { error: planError } = await supabase
+          .from('activity_plans')
+          .update({
+            section_id: formData.section_id,
+            activity_id: formData.activity_id,
+            vendor_id: formData.vendor_id || null,
+            target_date: formData.target_date,
+            stage_id: formData.stage_id || null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', editingPlanId)
+        
+        if (planError) throw planError
+        
+        // Delete existing block activities dan planned materials
+        await supabase.from('block_activities').delete().eq('activity_plan_id', editingPlanId)
+        await supabase.from('planned_materials').delete().eq('activity_plan_id', editingPlanId)
+        
+        // Insert new block activities
+        const blockActivities = formData.selectedBlocks.map(blockId => {
+          const block = blocks.find(b => b.id === blockId)
+          return {
+            activity_plan_id: editingPlanId,
+            block_id: blockId,
+            luas_total: block.luas_total,
+            luas_remaining: block.luas_total,
+            status: 'planned'
+          }
+        })
+        
+        await supabase.from('block_activities').insert(blockActivities)
+        
+        // Recalculate materials if stage selected
+        if (formData.stage_id) {
+          await calculateAndInsertMaterials(editingPlanId)
+        }
+        
+        alert('✅ Rencana berhasil diupdate!')
+        
+      } else {
+        // 🔥 CREATE MODE
+        const { data: plan, error: planError } = await supabase
+          .from('activity_plans')
+          .insert({
+            section_id: formData.section_id,
+            activity_id: formData.activity_id,
+            vendor_id: formData.vendor_id || null,
+            target_date: formData.target_date,
+            stage_id: formData.stage_id || null,
+            status: 'approved',
+            created_by: user.id
+          })
+          .select()
+          .single()
+        
+        if (planError) throw planError
+        
+        // Insert block activities
+        const blockActivities = formData.selectedBlocks.map(blockId => {
+          const block = blocks.find(b => b.id === blockId)
+          return {
+            activity_plan_id: plan.id,
+            block_id: blockId,
+            luas_total: block.luas_total,
+            luas_remaining: block.luas_total,
+            status: 'planned'
+          }
+        })
+        
+        await supabase.from('block_activities').insert(blockActivities)
+        
+        // Calculate materials if stage selected
+        if (formData.stage_id) {
+          await calculateAndInsertMaterials(plan.id)
+        }
+        
+        alert('✅ Rencana berhasil dibuat!')
       }
-    })
-    
-    await supabase.from('block_activities').insert(blockActivities)
-    
-    // Calculate materials if stage selected
-    if (formData.stage_id) {
-      await calculateAndInsertMaterials(plan.id)
+      
+      setShowModal(false)
+      setEditMode(false)
+      setEditingPlanId(null)
+      await fetchPlans()
+      handleNewPlan()
+      
+    } catch (error) {
+      console.error('Error saving plan:', error)
+      alert(`❌ Gagal menyimpan rencana: ${error.message}`)
     }
-    
-    alert('✅ Rencana berhasil dibuat!')
-    setShowModal(false)
-    fetchPlans()
-    handleNewPlan()
   }
   
   const calculateAndInsertMaterials = async (planId) => {
@@ -294,7 +433,7 @@ export default function WorkPlanRegistration({ user }) {
           }
         }
         
-        const quantity = parseFloat(sop.default_dosis) * parseFloat(block.luas_total)
+        const quantity = parseFloat(sop.dosis_per_ha) * parseFloat(block.luas_total)
         materialGroups[key].total_quantity += quantity
       })
     })
@@ -313,6 +452,8 @@ export default function WorkPlanRegistration({ user }) {
   }
   
   const handleNewPlan = () => {
+    setEditMode(false)
+    setEditingPlanId(null)
     setFormData({
       section_id: user.section_id || '',
       activity_id: '',
@@ -322,8 +463,14 @@ export default function WorkPlanRegistration({ user }) {
       selectedBlocks: []
     })
     setStages([])
+    setSelectedKawasan('')
     setShowModal(true)
   }
+  
+  // 🔥 NEW: Filter blocks berdasarkan kawasan
+  const filteredBlocks = selectedKawasan 
+    ? blocks.filter(b => b.kawasan === selectedKawasan)
+    : blocks
   
   const selectedActivity = activities.find(a => a.id === formData.activity_id)
   const showStageDropdown = stages.length > 0
@@ -331,20 +478,20 @@ export default function WorkPlanRegistration({ user }) {
   
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Work Plan Registration</h1>
+      <h1 className="text-2xl font-bold">📋 Work Plan Registration</h1>
       
       <div className="bg-white rounded-lg shadow">
         <div className="border-b">
           <div className="flex space-x-4">
             <button
               onClick={() => setActiveTab('rencana')}
-              className={`px-6 py-3 text-sm font-medium ${activeTab === 'rencana' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'}`}
+              className={`px-6 py-3 text-sm font-medium ${activeTab === 'rencana' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600 hover:text-blue-600'}`}
             >
               📋 Rencana Kerja
             </button>
             <button
               onClick={() => setActiveTab('material')}
-              className={`px-6 py-3 text-sm font-medium ${activeTab === 'material' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'}`}
+              className={`px-6 py-3 text-sm font-medium ${activeTab === 'material' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600 hover:text-blue-600'}`}
             >
               🧪 Rencana Material
             </button>
@@ -357,20 +504,21 @@ export default function WorkPlanRegistration({ user }) {
               <div className="flex justify-between items-center mb-4">
                 <button
                   onClick={handleNewPlan}
-                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2"
                 >
-                  + Buat Rencana Baru
+                  <span>+</span> Buat Rencana Baru
                 </button>
               </div>
               
               {plans.length === 0 ? (
-                <div className="text-center py-10 text-gray-500">Belum ada rencana kerja</div>
+                <div className="text-center py-12 text-gray-500 bg-gray-50 rounded border-2 border-dashed">
+                  <div className="text-4xl mb-2">📋</div>
+                  <div>Belum ada rencana kerja</div>
+                </div>
               ) : (
                 <div className="space-y-2">
                   {plans.map(plan => {
                     const isExpanded = expandedPlanId === plan.id
-                    
-                    // Progress calculations for expanded view
                     const totalLuas = expandedBlockActivities.reduce((s, ba) => s + parseFloat(ba.luas_total || 0), 0)
                     const totalSelesai = expandedBlockActivities.reduce((s, ba) => s + parseFloat(ba.luas_completed || 0), 0)
                     const totalSisa = totalLuas - totalSelesai
@@ -378,13 +526,15 @@ export default function WorkPlanRegistration({ user }) {
                     const blokSelesai = expandedBlockActivities.filter(ba => ba.status === 'completed').length
                     
                     return (
-                      <div key={plan.id} className="border rounded-lg overflow-hidden">
-                        {/* Row utama — clickable */}
-                        <div
-                          onClick={() => handleToggleExpand(plan.id)}
-                          className="flex items-center gap-4 p-4 cursor-pointer hover:bg-gray-50 transition-colors"
-                        >
-                          <div className="text-gray-400 text-sm w-4">{isExpanded ? '▼' : '▶'}</div>
+                      <div key={plan.id} className="border rounded-lg overflow-hidden hover:shadow-md transition-shadow">
+                        <div className="flex items-center gap-4 p-4">
+                          <button
+                            onClick={() => handleToggleExpand(plan.id)}
+                            className="text-gray-400 text-sm w-4 hover:text-gray-600"
+                          >
+                            {isExpanded ? '▼' : '▶'}
+                          </button>
+                          
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-semibold text-sm">{plan.activities?.name}</span>
@@ -405,12 +555,28 @@ export default function WorkPlanRegistration({ user }) {
                               {` · Target: ${new Date(plan.target_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`}
                             </div>
                           </div>
+                          
+                          {/* 🔥 NEW: Edit & Delete buttons */}
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleEditPlan(plan)}
+                              className="px-3 py-1 text-xs bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 font-medium"
+                              title="Edit rencana"
+                            >
+                              ✏️ Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeletePlan(plan)}
+                              className="px-3 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 font-medium"
+                              title="Hapus rencana"
+                            >
+                              🗑️ Hapus
+                            </button>
+                          </div>
                         </div>
                         
-                        {/* Expanded detail */}
                         {isExpanded && (
                           <div className="border-t bg-gray-50 p-4 space-y-4">
-                            {/* Overall progress */}
                             <div className="bg-white rounded-lg border p-4">
                               <div className="flex justify-between text-sm mb-2">
                                 <span className="font-medium text-gray-700">Progress Keseluruhan</span>
@@ -435,7 +601,6 @@ export default function WorkPlanRegistration({ user }) {
                               </div>
                             </div>
                             
-                            {/* List blok */}
                             <div>
                               <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Blok Kerja</div>
                               <div className="space-y-2">
@@ -512,10 +677,13 @@ export default function WorkPlanRegistration({ user }) {
         </div>
       </div>
       
+      {/* Modal Form */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto p-4">
           <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto m-4">
-            <h2 className="text-xl font-bold mb-4">Buat Rencana Kerja Baru</h2>
+            <h2 className="text-xl font-bold mb-4">
+              {editMode ? '✏️ Edit Rencana Kerja' : '📋 Buat Rencana Kerja Baru'}
+            </h2>
             
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
@@ -524,7 +692,7 @@ export default function WorkPlanRegistration({ user }) {
                   <select
                     value={formData.section_id}
                     onChange={(e) => setFormData({...formData, section_id: e.target.value})}
-                    className="w-full px-3 py-2 border rounded"
+                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
                     disabled={user.role === 'section_head'}
                   >
                     <option value="">Pilih Section</option>
@@ -538,7 +706,7 @@ export default function WorkPlanRegistration({ user }) {
                     type="date"
                     value={formData.target_date}
                     onChange={(e) => setFormData({...formData, target_date: e.target.value})}
-                    className="w-full px-3 py-2 border rounded"
+                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
               </div>
@@ -548,10 +716,12 @@ export default function WorkPlanRegistration({ user }) {
                 <select
                   value={formData.activity_id}
                   onChange={(e) => setFormData({...formData, activity_id: e.target.value, stage_id: ''})}
-                  className="w-full px-3 py-2 border rounded"
+                  className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">Pilih Activity</option>
-                  {activities.filter(a => a.section_id === formData.section_id).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  {activities.filter(a => a.section_id === formData.section_id).map(a => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
                 </select>
               </div>
               
@@ -573,7 +743,7 @@ export default function WorkPlanRegistration({ user }) {
                   <select
                     value={formData.vendor_id}
                     onChange={(e) => setFormData({...formData, vendor_id: e.target.value})}
-                    className="w-full px-3 py-2 border rounded"
+                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">Pilih Vendor</option>
                     {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
@@ -618,6 +788,30 @@ export default function WorkPlanRegistration({ user }) {
                 </div>
               )}
               
+              {/* 🔥 NEW: Kawasan Filter */}
+              {availableKawasan.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    🗺️ Filter Berdasarkan Kawasan (Opsional)
+                  </label>
+                  <select
+                    value={selectedKawasan}
+                    onChange={(e) => setSelectedKawasan(e.target.value)}
+                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Tampilkan Semua Kawasan</option>
+                    {availableKawasan.map(kawasan => (
+                      <option key={kawasan} value={kawasan}>{kawasan}</option>
+                    ))}
+                  </select>
+                  {selectedKawasan && (
+                    <div className="text-xs text-blue-600 mt-1">
+                      Menampilkan blok dari kawasan: {selectedKawasan}
+                    </div>
+                  )}
+                </div>
+              )}
+              
               <div>
                 <label className="block text-sm font-medium mb-2">
                   Pilih Blok *
@@ -649,31 +843,37 @@ export default function WorkPlanRegistration({ user }) {
                 )}
                 
                 <div className="border rounded max-h-60 overflow-y-auto">
-                  {blocks.map(block => (
-                    <label
-                      key={block.id}
-                      className="flex items-center gap-3 p-3 hover:bg-gray-50 cursor-pointer border-b last:border-b-0"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={formData.selectedBlocks.includes(block.id)}
-                        onChange={() => handleBlockToggle(block.id)}
-                        className="w-4 h-4"
-                      />
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{block.code}</span>
-                          <span className="text-sm text-gray-600">{block.name}</span>
-                          <span className={`text-xs px-2 py-0.5 rounded ${
-                            block.kategori === 'PC' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
-                          }`}>
-                            {block.kategori}
-                          </span>
+                  {filteredBlocks.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      Tidak ada blok di kawasan ini
+                    </div>
+                  ) : (
+                    filteredBlocks.map(block => (
+                      <label
+                        key={block.id}
+                        className="flex items-center gap-3 p-3 hover:bg-gray-50 cursor-pointer border-b last:border-b-0"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={formData.selectedBlocks.includes(block.id)}
+                          onChange={() => handleBlockToggle(block.id)}
+                          className="w-4 h-4"
+                        />
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{block.code}</span>
+                            <span className="text-sm text-gray-600">{block.name}</span>
+                            <span className={`text-xs px-2 py-0.5 rounded ${
+                              block.kategori === 'PC' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
+                            }`}>
+                              {block.kategori}
+                            </span>
+                          </div>
+                          <div className="text-xs text-gray-500">{block.kawasan} · {block.luas_total} Ha</div>
                         </div>
-                        <div className="text-xs text-gray-500">{block.kawasan} · {block.luas_total} Ha</div>
-                      </div>
-                    </label>
-                  ))}
+                      </label>
+                    ))
+                  )}
                 </div>
               </div>
               
@@ -689,7 +889,11 @@ export default function WorkPlanRegistration({ user }) {
             
             <div className="flex justify-end gap-2 mt-6">
               <button
-                onClick={() => setShowModal(false)}
+                onClick={() => {
+                  setShowModal(false)
+                  setEditMode(false)
+                  setEditingPlanId(null)
+                }}
                 className="px-4 py-2 border rounded hover:bg-gray-50"
               >
                 Batal
@@ -698,7 +902,7 @@ export default function WorkPlanRegistration({ user }) {
                 onClick={handleSubmit}
                 className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
               >
-                Simpan Rencana
+                {editMode ? '💾 Update Rencana' : '💾 Simpan Rencana'}
               </button>
             </div>
           </div>
