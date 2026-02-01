@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../utils/supabase'
 
 export default function MaterialPreview({ 
-  activityTypeId, 
+  activityId, 
   stageId,
   selectedBlocks, 
   blocks 
@@ -12,13 +12,13 @@ export default function MaterialPreview({
   const [warning, setWarning] = useState('')
 
   useEffect(() => {
-    if (activityTypeId && selectedBlocks.length > 0) {
+    if (activityId && selectedBlocks.length > 0) {
       fetchMaterialPreview()
     } else {
       setMaterials([])
       setWarning('')
     }
-  }, [activityTypeId, stageId, selectedBlocks])
+  }, [activityId, stageId, selectedBlocks])
 
   const fetchMaterialPreview = async () => {
     setLoading(true)
@@ -28,19 +28,17 @@ export default function MaterialPreview({
     let query = supabase
       .from('activity_materials')
       .select('*, materials(code, name, unit)')
-      .eq('activity_type_id', activityTypeId)
+      .eq('activity_id', activityId)
     
     // Filter by stage
     if (stageId) {
       query = query.eq('stage_id', stageId)
-    } else {
-      query = query.is('stage_id', null)
     }
 
     const { data: sopMaterials, error } = await query
     
     console.log('🔍 Material preview query:', {
-      activity: activityTypeId,
+      activity: activityId,
       stage: stageId,
       results: sopMaterials?.length || 0,
       error
