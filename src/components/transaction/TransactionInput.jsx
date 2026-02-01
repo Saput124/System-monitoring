@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../utils/supabase'
 
-export default function TransactionInput({ user }) {
+export default function TransactionInput({ user, onTransactionSuccess }) {
   const [plans, setPlans] = useState([])
   const [selectedPlan, setSelectedPlan] = useState(null)
   const [blockActivities, setBlockActivities] = useState([])
@@ -85,8 +85,6 @@ export default function TransactionInput({ user }) {
   }
 
   const handleLuasChange = (blockActivityId, value) => {
-    // Simpan sebagai string mentah dari input.
-    // Boleh kosong, boleh "2.", boleh "0.5" — jangan parseFloat di sini.
     setSelectedBlocks(selectedBlocks.map(b =>
       b.id === blockActivityId ? { ...b, luas_dikerjakan: value } : b
     ))
@@ -107,25 +105,34 @@ export default function TransactionInput({ user }) {
       return
     }
 
-    // Re-fetch fresh block_activities dari DB sebelum validasi
-    // supaya luas_remaining reflect trigger update dari transaksi sebelumnya
+    // 🔥 FIX: Re-fetch FRESH block_activities sebelum validasi
     const { data: freshBlocks } = await supabase
       .from('block_activities')
       .select('*')
-      .eq('activity_plan_id', selectedPlan.id)
+      .in('id', selectedBlocks.map(b => b.id))
 
-    // Validate luas dikerjakan
+    // Validate luas dikerjakan dengan data FRESH
     for (const block of selectedBlocks) {
       const parsed = parseFloat(block.luas_dikerjakan)
       if (isNaN(parsed) || parsed <= 0) {
         alert(`❌ Luas dikerjakan untuk ${block.code} harus > 0`)
         return
       }
+      
       // Cek sisa dari data fresh di DB
       const freshBlock = freshBlocks?.find(fb => fb.id === block.id)
-      const currentRemaining = freshBlock ? parseFloat(freshBlock.luas_remaining) : parseFloat(block.luas_remaining)
+      if (!freshBlock) {
+        alert(`❌ Data blok ${block.code} tidak ditemukan!`)
+        return
+      }
+      
+      const currentRemaining = parseFloat(freshBlock.luas_remaining)
+      
       if (parsed > currentRemaining) {
-        alert(`❌ Luas dikerjakan untuk ${block.code} (${parsed}) melebihi sisa yang tersedia (${currentRemaining.toFixed(2)} Ha)`)
+        alert(`❌ Luas dikerjakan untuk ${block.code} (${parsed} Ha) melebihi sisa yang tersedia (${currentRemaining.toFixed(2)} Ha).\n\nSilakan refresh halaman atau kurangi nilai input.`)
+        
+        // Auto-refresh block activities untuk update UI
+        await fetchBlockActivities()
         return
       }
     }
@@ -149,7 +156,6 @@ export default function TransactionInput({ user }) {
       if (txError) throw txError
 
       // 2. Insert transaction_blocks per blok yang dipilih
-      // -> trigger update_block_progress otomatis update block_activities
       const blockInserts = selectedBlocks.map(block => ({
         transaction_id: transaction.id,
         block_id: block.block_id,
@@ -163,7 +169,6 @@ export default function TransactionInput({ user }) {
       if (blockError) throw blockError
 
       // 3. Insert transaction_materials kalau activity requires material
-      // -> trigger update_material_allocation otomatis update planned_materials
       if (selectedPlan.activities?.requires_material) {
         let matQuery = supabase
           .from('activity_materials')
@@ -177,34 +182,39 @@ export default function TransactionInput({ user }) {
         const { data: sopMaterials } = await matQuery
 
         if (sopMaterials && sopMaterials.length > 0) {
-          // Aggregate material per blok (dosis * luas), group by material_id
           const materialTotals = {}
 
           selectedBlocks.forEach(block => {
             const blockData = blockActivities.find(ba => ba.id === block.id)
-            const blockKategori = blockData?.blocks?.kategori
+            const luasDikerjakan = parseFloat(block.luas_dikerjakan)
 
             sopMaterials.forEach(sop => {
-              // Filter material berdasarkan kategori blok
-              if (sop.kategori && sop.kategori !== 'ALL' && sop.kategori !== blockKategori) return
+              const materialId = sop.material_id
+              const dosis = parseFloat(sop.dosis_per_ha)
 
-              const key = sop.material_id
-              if (!materialTotals[key]) {
-                materialTotals[key] = {
-                  material_id: sop.material_id,
-                  quantity_used: 0,
-                  unit: sop.unit || sop.materials?.unit
+              // Filter by kategori if specified
+              if (sop.kategori_blok && sop.kategori_blok !== 'ALL' && sop.kategori_blok !== blockData.blocks.kategori) {
+                return
+              }
+
+              const qty = dosis * luasDikerjakan
+
+              if (!materialTotals[materialId]) {
+                materialTotals[materialId] = {
+                  material_id: materialId,
+                  unit: sop.materials.unit,
+                  quantity: 0
                 }
               }
-              materialTotals[key].quantity_used += parseFloat(sop.default_dosis) * parseFloat(block.luas_dikerjakan)
+              materialTotals[materialId].quantity += qty
             })
           })
 
-          const materialInserts = Object.values(materialTotals).map(m => ({
+          const materialInserts = Object.values(materialTotals).map(mat => ({
             transaction_id: transaction.id,
-            material_id: m.material_id,
-            quantity_used: parseFloat(m.quantity_used.toFixed(3)),
-            unit: m.unit
+            material_id: mat.material_id,
+            quantity_used: mat.quantity,
+            unit: mat.unit
           }))
 
           if (materialInserts.length > 0) {
@@ -217,7 +227,7 @@ export default function TransactionInput({ user }) {
         }
       }
 
-      alert(`✅ Transaksi berhasil disimpan untuk ${selectedBlocks.length} blok!`)
+      alert('✅ Transaksi berhasil disimpan!')
       
       // Reset form
       setSelectedBlocks([])
@@ -227,12 +237,17 @@ export default function TransactionInput({ user }) {
         catatan: ''
       })
       
-      // Refresh data — await supaya luas_remaining sudah update dari trigger
+      // Refresh block activities untuk update UI dengan data terbaru
       await fetchBlockActivities()
-      await fetchPlans()
+      
+      // 🔥 FIX: Trigger callback untuk refresh history tab
+      if (onTransactionSuccess) {
+        onTransactionSuccess()
+      }
 
     } catch (error) {
-      alert('❌ Error: ' + error.message)
+      console.error('Error saving transaction:', error)
+      alert(`❌ Gagal menyimpan transaksi: ${error.message}`)
     }
 
     setLoading(false)
@@ -240,26 +255,26 @@ export default function TransactionInput({ user }) {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Input Transaksi</h1>
-
       <div className="bg-white rounded-lg shadow p-6">
-        <div className="space-y-4">
+        <div className="space-y-6">
           <div>
             <label className="block text-sm font-medium mb-2">Pilih Rencana Kerja *</label>
-            <select 
-              value={selectedPlan?.id || ''} 
+            <select
+              value={selectedPlan?.id || ''}
               onChange={(e) => {
                 const plan = plans.find(p => p.id === e.target.value)
                 setSelectedPlan(plan)
+                setSelectedBlocks([])
               }}
-              className="w-full px-3 py-2 border rounded"
+              className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
             >
               <option value="">-- Pilih Rencana --</option>
-              {plans.map(plan => (
-                <option key={plan.id} value={plan.id}>
-                  {plan.activities?.name} - {plan.sections?.name} - {new Date(plan.target_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
-                  {plan.activity_stages ? ` [${plan.activity_stages.name}]` : ''}
-                  {plan.vendors ? ` - ${plan.vendors.name}` : ''}
+              {plans.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.activities?.name} - {p.sections?.name} 
+                  {p.activity_stages && ` - ${p.activity_stages.name}`}
+                  {p.vendors && ` - ${p.vendors.name}`}
+                  {' '}({new Date(p.target_date).toLocaleDateString('id-ID')})
                 </option>
               ))}
             </select>
@@ -292,14 +307,16 @@ export default function TransactionInput({ user }) {
                 </div>
                 
                 {blockActivities.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">Semua blok sudah selesai</div>
+                  <div className="text-center py-8 text-gray-500 bg-gray-50 rounded border-2 border-dashed">
+                    🎉 Semua blok sudah selesai dikerjakan!
+                  </div>
                 ) : (
                   <div className="border rounded divide-y max-h-96 overflow-y-auto">
                     {blockActivities.map(ba => {
                       const selected = selectedBlocks.find(b => b.id === ba.id)
                       
                       return (
-                        <div key={ba.id} className={`p-4 ${selected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}>
+                        <div key={ba.id} className={`p-4 ${selected ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50'}`}>
                           <label className="flex items-start gap-3 cursor-pointer">
                             <input
                               type="checkbox"
@@ -323,34 +340,35 @@ export default function TransactionInput({ user }) {
                               </div>
                               
                               <div className="grid grid-cols-3 gap-2 text-sm mb-2">
-                                <div className="bg-white px-2 py-1 rounded">
+                                <div className="bg-white px-2 py-1 rounded border">
                                   <span className="text-gray-600">Total:</span> <span className="font-medium">{ba.luas_total} Ha</span>
                                 </div>
-                                <div className="bg-white px-2 py-1 rounded">
+                                <div className="bg-white px-2 py-1 rounded border">
                                   <span className="text-gray-600">Selesai:</span> <span className="font-medium text-green-600">{(ba.luas_completed || 0).toFixed(2)} Ha</span>
                                 </div>
-                                <div className="bg-white px-2 py-1 rounded">
+                                <div className="bg-white px-2 py-1 rounded border">
                                   <span className="text-gray-600">Sisa:</span> <span className="font-medium text-orange-600">{ba.luas_remaining.toFixed(2)} Ha</span>
                                 </div>
                               </div>
 
                               {selected && (
-                                <div className="mt-3">
+                                <div className="mt-3 bg-white p-3 rounded border-2 border-blue-200">
                                   <label className="block text-xs font-medium text-gray-700 mb-1">
                                     Luas Dikerjakan Hari Ini (Ha) *
                                   </label>
                                   <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    pattern="[0-9]*\.?[0-9]*"
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    max={ba.luas_remaining}
                                     value={selected.luas_dikerjakan}
                                     onChange={(e) => handleLuasChange(ba.id, e.target.value)}
                                     onFocus={(e) => e.target.select()}
-                                    className="w-full px-3 py-2 border rounded"
-                                    placeholder="Masukkan luas (Ha)"
+                                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
+                                    placeholder={`Maksimal ${ba.luas_remaining.toFixed(2)} Ha`}
                                   />
-                                  <div className="text-xs text-orange-600 mt-1">
-                                    Sisa yang tersedia: {ba.luas_remaining.toFixed(2)} Ha
+                                  <div className="text-xs text-orange-600 mt-1 font-medium">
+                                    ⚠️ Sisa yang tersedia: {ba.luas_remaining.toFixed(2)} Ha
                                   </div>
                                 </div>
                               )}
@@ -372,16 +390,17 @@ export default function TransactionInput({ user }) {
                         type="date" 
                         value={formData.tanggal} 
                         onChange={(e) => setFormData({...formData, tanggal: e.target.value})} 
-                        className="w-full px-3 py-2 border rounded" 
+                        className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500" 
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-1">Jumlah Pekerja</label>
                       <input 
                         type="number" 
+                        min="0"
                         value={formData.jumlah_pekerja} 
                         onChange={(e) => setFormData({...formData, jumlah_pekerja: e.target.value})} 
-                        className="w-full px-3 py-2 border rounded" 
+                        className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500" 
                         placeholder="Total pekerja"
                       />
                     </div>
@@ -392,14 +411,16 @@ export default function TransactionInput({ user }) {
                     <textarea 
                       value={formData.catatan} 
                       onChange={(e) => setFormData({...formData, catatan: e.target.value})} 
-                      className="w-full px-3 py-2 border rounded" 
+                      className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500" 
                       rows={3}
                       placeholder="Kondisi lapangan, catatan tambahan, dll"
                     />
                   </div>
 
                   <div className="bg-green-50 border border-green-200 rounded p-4">
-                    <h3 className="font-semibold mb-2">Summary Transaksi</h3>
+                    <h3 className="font-semibold mb-2 flex items-center gap-2">
+                      <span>📊</span> Summary Transaksi
+                    </h3>
                     <div className="space-y-1 text-sm">
                       <div className="flex justify-between">
                         <span className="text-gray-600">Jumlah Blok:</span>
@@ -410,8 +431,8 @@ export default function TransactionInput({ user }) {
                         <span className="font-medium">{getTotalLuasDikerjakan().toFixed(2)} Ha</span>
                       </div>
                       {selectedPlan.activities?.requires_material && (
-                        <div className="text-xs text-gray-600 mt-2">
-                          * Material akan otomatis terhitung sesuai SOP
+                        <div className="text-xs text-gray-600 mt-2 bg-blue-50 p-2 rounded">
+                          ℹ️ Material akan otomatis terhitung sesuai SOP
                         </div>
                       )}
                     </div>
@@ -429,14 +450,14 @@ export default function TransactionInput({ user }) {
                       }}
                       className="px-4 py-2 border rounded hover:bg-gray-50"
                     >
-                      Reset
+                      🔄 Reset
                     </button>
                     <button 
                       onClick={handleSubmit}
                       disabled={loading}
-                      className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                      className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {loading ? 'Menyimpan...' : '💾 Simpan Transaksi'}
+                      {loading ? '⏳ Menyimpan...' : '💾 Simpan Transaksi'}
                     </button>
                   </div>
                 </>
