@@ -8,12 +8,12 @@ import WorkPlanRegistration from './components/planning/WorkPlanRegistration'
 import Transaction from './components/transaction/Transaction'
 
 function MainLayout({ user, onLogout }) {
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const location = useLocation()
 
   const navigation = [
     { name: 'Dashboard', href: '/', icon: '📊', roles: ['admin', 'section_head', 'supervisor', 'vendor'] },
-    { name: 'Master Data', href: '/master', icon: '📁', roles: ['admin'] },
+    { name: 'Master', href: '/master', icon: '📁', roles: ['admin'] },
     { name: 'Assignment', href: '/assignment', icon: '⚙️', roles: ['admin'] },
     { name: 'Planning', href: '/planning', icon: '📋', roles: ['admin', 'section_head'] },
     { name: 'Transaksi', href: '/transaction', icon: '💼', roles: ['admin', 'section_head', 'supervisor', 'vendor'] }
@@ -26,119 +26,123 @@ function MainLayout({ user, onLogout }) {
     return location.pathname.startsWith(path)
   }
 
+  // Close sidebar on route change (mobile)
+  useEffect(() => {
+    setSidebarOpen(false)
+  }, [location.pathname])
+
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <nav className="bg-gradient-to-r from-blue-600 to-blue-700 shadow-lg sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <Link to="/" className="flex items-center space-x-2">
-                <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
-                  <span className="text-xl">🌱</span>
-                </div>
-                <span className="text-xl font-bold text-white hidden sm:block">VND Monitoring</span>
-                <span className="text-xl font-bold text-white sm:hidden">VND</span>
-              </Link>
+    <div className="min-h-screen bg-gray-50">
+      {/* 🖥️ DESKTOP: Top Bar with Sidebar Toggle */}
+      <div className="lg:hidden bg-gradient-to-r from-blue-600 to-blue-700 text-white sticky top-0 z-30">
+        <div className="flex items-center justify-between px-4 h-14">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
+              <span className="text-xl">🌱</span>
             </div>
-
-            <div className="hidden md:flex items-center space-x-1">
-              {visibleNav.map((item) => (
-                <Link
-                  key={item.name}
-                  to={item.href}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                    isActive(item.href)
-                      ? 'bg-white text-blue-600 shadow-md'
-                      : 'text-white hover:bg-blue-500'
-                  }`}
-                >
-                  <span className="mr-2">{item.icon}</span>
-                  {item.name}
-                </Link>
-              ))}
+            <span className="font-bold text-lg">VND</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="text-xs text-right">
+              <div className="font-medium">{user.full_name}</div>
+              <div className="text-blue-200 text-[10px]">{user.role}</div>
             </div>
+            <button
+              onClick={onLogout}
+              className="p-2 bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
 
-            <div className="flex items-center space-x-3">
-              <div className="hidden sm:flex items-center space-x-2">
-                <div className="text-right">
-                  <div className="text-sm font-medium text-white">{user.full_name}</div>
-                  <div className="text-xs text-blue-100">{user.role}</div>
-                </div>
+      <div className="lg:flex lg:min-h-screen">
+        {/* 🖥️ DESKTOP: Sidebar */}
+        <aside className="hidden lg:flex lg:flex-col lg:w-64 bg-gradient-to-b from-blue-600 to-blue-700 text-white">
+          <div className="p-6 border-b border-blue-500">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center">
+                <span className="text-2xl">🌱</span>
               </div>
+              <div>
+                <div className="font-bold text-xl">VND Monitoring</div>
+                <div className="text-xs text-blue-200">Vendor Management</div>
+              </div>
+            </div>
+          </div>
 
+          <nav className="flex-1 p-4 space-y-2">
+            {visibleNav.map((item) => (
+              <Link
+                key={item.name}
+                to={item.href}
+                className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${
+                  isActive(item.href)
+                    ? 'bg-white text-blue-600 shadow-lg'
+                    : 'text-white hover:bg-blue-500'
+                }`}
+              >
+                <span className="text-xl">{item.icon}</span>
+                <span>{item.name}</span>
+              </Link>
+            ))}
+          </nav>
+
+          <div className="p-4 border-t border-blue-500">
+            <div className="bg-blue-500 rounded-lg p-4">
+              <div className="text-sm font-medium">{user.full_name}</div>
+              <div className="text-xs text-blue-200 mt-1">{user.role}</div>
               <button
                 onClick={onLogout}
-                className="hidden md:flex items-center px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+                className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 rounded-lg text-sm font-medium transition-colors"
               >
-                Logout
-              </button>
-
-              <button
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className="md:hidden p-2 rounded-lg text-white hover:bg-blue-500 transition-colors"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  {mobileMenuOpen ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                  )}
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                 </svg>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {mobileMenuOpen && (
-          <div className="md:hidden bg-blue-700 border-t border-blue-600">
-            <div className="px-4 py-3 space-y-2">
-              <div className="pb-3 border-b border-blue-600 mb-3">
-                <div className="text-sm font-medium text-white">{user.full_name}</div>
-                <div className="text-xs text-blue-200">{user.role}</div>
-              </div>
-
-              {visibleNav.map((item) => (
-                <Link
-                  key={item.name}
-                  to={item.href}
-                  onClick={() => setMobileMenuOpen(false)}
-                  className={`flex items-center px-4 py-3 rounded-lg text-sm font-medium transition-all ${
-                    isActive(item.href)
-                      ? 'bg-white text-blue-600 shadow-md'
-                      : 'text-white hover:bg-blue-600'
-                  }`}
-                >
-                  <span className="mr-3 text-xl">{item.icon}</span>
-                  {item.name}
-                </Link>
-              ))}
-
-              <button
-                onClick={() => {
-                  setMobileMenuOpen(false)
-                  onLogout()
-                }}
-                className="w-full flex items-center px-4 py-3 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
-              >
-                <span className="mr-3">🚪</span>
                 Logout
               </button>
             </div>
           </div>
-        )}
-      </nav>
+        </aside>
 
-      <main className="flex-1 w-full">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 lg:py-8">
-          <Routes>
-            <Route path="/" element={<Dashboard user={user} />} />
-            <Route path="/master" element={user.role === 'admin' ? <MasterData user={user} /> : <Navigate to="/" />} />
-            <Route path="/assignment" element={user.role === 'admin' ? <Assignment user={user} /> : <Navigate to="/" />} />
-            <Route path="/planning" element={['admin', 'section_head'].includes(user.role) ? <WorkPlanRegistration user={user} /> : <Navigate to="/" />} />
-            <Route path="/transaction" element={<Transaction user={user} />} />
-          </Routes>
+        {/* 📄 MAIN CONTENT */}
+        <main className="flex-1 pb-16 lg:pb-0">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <Routes>
+              <Route path="/" element={<Dashboard user={user} />} />
+              <Route path="/master" element={user.role === 'admin' ? <MasterData user={user} /> : <Navigate to="/" />} />
+              <Route path="/assignment" element={user.role === 'admin' ? <Assignment user={user} /> : <Navigate to="/" />} />
+              <Route path="/planning" element={['admin', 'section_head'].includes(user.role) ? <WorkPlanRegistration user={user} /> : <Navigate to="/" />} />
+              <Route path="/transaction" element={<Transaction user={user} />} />
+            </Routes>
+          </div>
+        </main>
+      </div>
+
+      {/* 📱 MOBILE: Bottom Navigation */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50">
+        <div className="grid grid-cols-5 gap-1 px-2 py-2">
+          {visibleNav.map((item) => (
+            <Link
+              key={item.name}
+              to={item.href}
+              className={`flex flex-col items-center justify-center py-2 px-1 rounded-lg transition-all ${
+                isActive(item.href)
+                  ? 'bg-blue-50 text-blue-600'
+                  : 'text-gray-600'
+              }`}
+            >
+              <span className="text-2xl mb-1">{item.icon}</span>
+              <span className="text-[10px] font-medium leading-tight text-center">
+                {item.name}
+              </span>
+            </Link>
+          ))}
         </div>
-      </main>
+      </nav>
     </div>
   )
 }
