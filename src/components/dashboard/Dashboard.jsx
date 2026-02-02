@@ -285,56 +285,56 @@ export default function Dashboard({ user }) {
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg shadow-lg p-6 text-white">
+      {/* Stats Cards - RESPONSIVE */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
+        <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg shadow-lg p-4 sm:p-5 lg:p-6 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm opacity-90">Total Rencana</p>
-              <p className="text-3xl font-bold">{stats.total_plans}</p>
+              <p className="text-xs sm:text-sm opacity-90">Total Rencana</p>
+              <p className="text-2xl sm:text-3xl lg:text-4xl font-bold mt-1">{stats.total_plans}</p>
             </div>
-            <div className="text-4xl opacity-80">📋</div>
+            <div className="text-3xl sm:text-4xl lg:text-5xl opacity-80">📋</div>
           </div>
-          <div className="mt-2 text-xs opacity-90">
+          <div className="mt-2 sm:mt-3 text-[10px] sm:text-xs opacity-90">
             {stats.in_progress_plans} in progress · {stats.completed_plans} completed
           </div>
         </div>
 
-        <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow-lg p-6 text-white">
+        <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow-lg p-4 sm:p-5 lg:p-6 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm opacity-90">Blok Selesai</p>
-              <p className="text-3xl font-bold">{stats.completed_blocks}</p>
+              <p className="text-xs sm:text-sm opacity-90">Blok Selesai</p>
+              <p className="text-2xl sm:text-3xl lg:text-4xl font-bold mt-1">{stats.completed_blocks}</p>
             </div>
-            <div className="text-4xl opacity-80">✅</div>
+            <div className="text-3xl sm:text-4xl lg:text-5xl opacity-80">✅</div>
           </div>
-          <div className="mt-2 text-xs opacity-90">
+          <div className="mt-2 sm:mt-3 text-[10px] sm:text-xs opacity-90">
             dari {stats.total_blocks} blok ({stats.total_blocks > 0 ? Math.round((stats.completed_blocks / stats.total_blocks) * 100) : 0}%)
           </div>
         </div>
 
-        <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg shadow-lg p-6 text-white">
+        <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg shadow-lg p-4 sm:p-5 lg:p-6 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm opacity-90">Total Luas</p>
-              <p className="text-3xl font-bold">{stats.total_luas.toFixed(1)}</p>
+              <p className="text-xs sm:text-sm opacity-90">Total Luas</p>
+              <p className="text-2xl sm:text-3xl lg:text-4xl font-bold mt-1">{stats.total_luas.toFixed(1)}</p>
             </div>
-            <div className="text-4xl opacity-80">🗺️</div>
+            <div className="text-3xl sm:text-4xl lg:text-5xl opacity-80">🗺️</div>
           </div>
-          <div className="mt-2 text-xs opacity-90">
+          <div className="mt-2 sm:mt-3 text-[10px] sm:text-xs opacity-90">
             Ha total area
           </div>
         </div>
 
-        <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg shadow-lg p-6 text-white">
+        <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg shadow-lg p-4 sm:p-5 lg:p-6 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm opacity-90">Luas Selesai</p>
-              <p className="text-3xl font-bold">{stats.completed_luas.toFixed(1)}</p>
+              <p className="text-xs sm:text-sm opacity-90">Luas Selesai</p>
+              <p className="text-2xl sm:text-3xl lg:text-4xl font-bold mt-1">{stats.completed_luas.toFixed(1)}</p>
             </div>
-            <div className="text-4xl opacity-80">📊</div>
+            <div className="text-3xl sm:text-4xl lg:text-5xl opacity-80">📊</div>
           </div>
-          <div className="mt-2 text-xs opacity-90">
+          <div className="mt-2 sm:mt-3 text-[10px] sm:text-xs opacity-90">
             Ha completed ({stats.total_luas > 0 ? Math.round((stats.completed_luas / stats.total_luas) * 100) : 0}%)
           </div>
         </div>
@@ -368,17 +368,17 @@ export default function Dashboard({ user }) {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         {/* Recent Plans */}
         <div className="bg-white rounded-lg shadow">
-          <div className="p-6 border-b">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
+          <div className="p-4 sm:p-6 border-b">
+            <h2 className="text-base sm:text-lg font-semibold flex items-center gap-2">
               <span>🎯</span> Recent Work Plans
             </h2>
           </div>
-          <div className="p-6">
+          <div className="p-4 sm:p-6">
             {recentPlans.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">Belum ada rencana kerja</div>
+              <div className="text-center py-8 text-sm sm:text-base text-gray-500">Belum ada rencana kerja</div>
             ) : (
               <div className="space-y-3">
                 {recentPlans.map(plan => {
@@ -387,8 +387,8 @@ export default function Dashboard({ user }) {
                     <div key={plan.id} className="border rounded p-3 hover:shadow-md transition-shadow">
                       <div className="flex justify-between items-start mb-2">
                         <div className="flex-1">
-                          <div className="font-medium text-sm">{plan.activities.name}</div>
-                          <div className="text-xs text-gray-600">{plan.sections.name}</div>
+                          <div className="font-medium text-sm sm:text-base">{plan.activities.name}</div>
+                          <div className="text-xs sm:text-sm text-gray-600">{plan.sections.name}</div>
                         </div>
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                           plan.status === 'completed' ? 'bg-green-100 text-green-800' :
